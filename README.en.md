@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  A Selenium-based web vulnerability scanner · <b>HTTP/HTTPS</b> · <b>323 techniques</b> · <b>HackerOne-format reports (auto CWE/CVSS)</b>
+  A Selenium-based web vulnerability scanner · <b>HTTP/HTTPS</b> · <b>329 techniques</b> · <b>HackerOne-format reports (auto CWE/CVSS)</b>
 </p>
 
 ---
@@ -21,7 +21,7 @@ missed by HTTP-only scanners. On top of that, turning findings into a submittabl
 takes a lot of time.
 
 **Nemesis** combines real-browser automation (Selenium) with HTTP/HTTPS checks: enter a URL, pick
-the attack techniques, and it detects vulnerabilities across **323 techniques**, chains
+the attack techniques, and it detects vulnerabilities across **329 techniques**, chains
 follow-up attacks based on what it finds, then generates a **HackerOne-format report with
 automatic CWE/CVSS mapping**. It ships as a **standalone desktop app** with its own logo icon.
 
@@ -33,7 +33,7 @@ automatic CWE/CVSS mapping**. It ships as a **standalone desktop app** with its 
 
 ## Purpose
 
-- **Broad coverage** — 12 categories and 323 techniques across Injection, Client-Side,
+- **Broad coverage** — 12 categories and 329 techniques across Injection, Client-Side,
   Auth/Access, Config, Exposures, Exposed Panels, Misconfiguration, Tech/CVE, Recon, and more.
 - **Real-browser validation** — Selenium actually renders the DOM and fires events to cut
   false positives, streaming the scan screen live.
@@ -41,8 +41,9 @@ automatic CWE/CVSS mapping**. It ships as a **standalone desktop app** with its 
   exposed .git→source recovery).
 - **Submission-ready output** — automatic CWE/CVSS v3.1/OWASP/CAPEC mapping, plus PoC (curl),
   raw HTTP, reproduction steps, impact, and remediation in HackerOne-format Markdown.
-- **Safe defaults** — non-destructive payloads, request pacing (non-DoS), and automatic skip
-  of OOB families when no canary is configured.
+- **Safe defaults** — non-destructive payloads and request pacing (non-DoS). Blind families
+  confirm via OOB when a canary is set, and run in-band detection when it is not
+  (see [Responsibility](#responsibility)).
 
 ## Responsibility
 
@@ -52,18 +53,27 @@ automatic CWE/CVSS mapping**. It ships as a **standalone desktop app** with its 
 
 - Do not scan out-of-scope targets, and keep request intervals generous.
 - All payloads are **non-destructive detection only**, with request pacing (non-DoS) and safe defaults.
-- Blind families (SSRF, Log4Shell, XXE, Blind XSS, RFI, etc.) only call back to **a canary
-  domain you control**. When unset they are skipped automatically (no callbacks to internal/third-party hosts).
+- **Credential testing (brute/stuffing/spray)** is for authorized targets only — it is paced,
+  attempt-capped, and **stops immediately on any lockout/rate-limit signal** (never locks real
+  accounts). It is **disabled by default (opt-in)** and must be explicitly selected.
 - Check each finding's confidence (`Confirmed`/`Firm`/`Tentative`) and verify manually.
 - Do not exaggerate report titles or severity (fact- and evidence-based). Leaked personal
   accounts (exposed IDs/passwords) are out of scope.
 
-### What it does NOT automate (an honest scope)
+### Extended (authorized) execution
+> The items below are enabled at the request of an authorized engineer. Keep the safeguards
+> (pacing, attempt caps, lockout detection) in place.
+- **Blind families (SSRF, Log4Shell, XXE, Blind XSS, RFI)** now **run even without a canary**.
+  With a canary they confirm via OOB callback; without one they use **in-band detection**
+  (SSRF = cloud-metadata reflection, RFI = include errors, XXE = local-file disclosure,
+  Blind XSS = stored/reflected marker) and report candidates.
+- **Credential testing** — `credential_testing` module (brute/stuffing/spray); opt-in, paced, lockout-aware.
+- **Race conditions/TOCTOU · supply chain · XS-Leaks · mXSS · container/K8s escape** — dedicated
+  detection modules surface candidates (non-destructive). A researcher validates real exploitation
+  (e.g. parallel requests) within scope.
+
+### Still NOT automated
 - **DoS/DDoS/Slowloris/ReDoS/Billion Laughs** — not implemented (service disruption/abuse).
-- **Brute force / credential stuffing / password spraying** — not run (account lockout/abuse);
-  instead it detects the weaknesses that enable them (missing rate limiting, MFA, CAPTCHA).
-- **Race conditions/TOCTOU/container-K8s escape/supply chain/XS-Leaks/mXSS** — context-dependent,
-  so it only surfaces candidates; a researcher performs the real exploitation check.
 
 ## How to run
 
@@ -113,7 +123,7 @@ powershell -ExecutionPolicy Bypass -File build_web_exe.ps1
   **Attack Viewer**. You can **click, type, and scroll** directly in the view (forwarded live to
   the server-side Chrome), and use the **address bar** at the top to navigate / back / forward / reload.
 - The scan does **not** start on its own. Once the page is in the state you want, type **`/start`**
-  in the terminal (or `/scan`, or an attack number) to run it. The viewer then switches to
+  in the terminal (or an attack number) to run it. The viewer then switches to
   the live scan view and the address bar shows the current scan target.
 
 ## Terminal commands
@@ -124,7 +134,6 @@ Type `/` in the bottom TERMINAL to open the command popover.
 |---|---|
 | `/start [url]` | **Start the scan** with the selected techniques (prepare in the viewer, then run this) |
 | `/attack [query]` | List techniques with numbers → **enter a number to run that attack alone** |
-| `/scan [url]` | Start the scan (alias of `/start`) |
 | `/login` | Interactive auto-login setup (URL → username → password) |
 | `/status` | Show the current scan status |
 | `/stop` | Stop the running scan |

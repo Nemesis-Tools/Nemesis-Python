@@ -69,8 +69,100 @@ def _raw_request(finding: Finding) -> str:
     return "\n".join(out)
 
 
+def clickjacking_report_md(target: str, finding: Finding, index: int | None = None) -> str:
+    """Korean-format clickjacking report with an attached PoC (HTML + framing screenshot)."""
+    ex = finding.extra or {}
+    url = finding.url or target
+    xfo = ex.get("xfo") or ""
+    has_fa = ex.get("has_frame_ancestors", False)
+    proven = ex.get("framing_proven", False)
+    sensitive = ex.get("sensitive_actions") or []
+    poc_html = ex.get("poc_html") or ""
+    shot = ex.get("screenshot_b64") or ""
+    num = f"{index}. " if index is not None else ""
+    L: list[str] = []
+
+    L.append(f"# {num}클릭재킹(Clickjacking) — 프레이밍 방어 헤더 미설정")
+    L.append("")
+    L.append("## 취약점 설명")
+    L.append("대상 웹페이지에 클릭재킹(Clickjacking) 방어를 위한 보안 헤더가 설정되어 있지 않습니다.")
+    L.append("")
+    L.append("확인 결과 응답 헤더에 X-Frame-Options 헤더와 Content-Security-Policy(CSP)의 "
+             "frame-ancestors 지시어가 존재하지 않아 외부 사이트에서 iframe을 통해 페이지를 삽입할 "
+             "가능성이 확인되었습니다.")
+    L.append("")
+    L.append("공격자는 악성 웹페이지에 해당 페이지를 투명하거나 위장된 iframe으로 삽입한 뒤 사용자의 "
+             "클릭을 유도하여 의도하지 않은 기능을 수행하도록 만들 수 있습니다(UI Redressing).")
+    L.append("")
+
+    L.append("## 영향")
+    L.append("- 공격자는 사용자가 로그인된 상태에서 악성 웹사이트를 통해 대상 페이지를 iframe으로 삽입하고 "
+             "클릭을 유도할 수 있습니다.")
+    L.append("- 대상 페이지에 중요 기능(설정 변경, 구독, 팔로우, 결제 등)이 존재하는 경우 사용자가 의도하지 "
+             "않은 동작을 수행할 가능성이 있습니다.")
+    if sensitive:
+        L.append(f"- 실제로 대상 페이지에서 다음 민감 기능(추정)이 확인되었습니다: **{', '.join(sensitive)}**.")
+    L.append("- 이는 사용자 행위 위조(UI Redressing)를 통한 클릭재킹 공격으로 이어질 수 있습니다.")
+    L.append("")
+
+    L.append("## 증거")
+    L.append(f"- **대상 URL**: {url}")
+    L.append("- **HTTP Response Header**")
+    L.append(f"  - X-Frame-Options : {xfo or '없음'}")
+    L.append(f"  - Content-Security-Policy : {'frame-ancestors 미설정' if not has_fa else 'frame-ancestors 설정됨'}")
+    if proven:
+        L.append("- **프레이밍 실증**: 대상 페이지를 외부 origin(로컬 공격 페이지)의 iframe에 로드하여 정상 "
+                 "렌더링됨을 스크린샷으로 확인했습니다(아래 PoC/스크린샷).")
+    else:
+        L.append("- **프레이밍 근거**: 방어 헤더 부재로 프레이밍이 가능합니다(아래 PoC로 재현 가능).")
+    L.append("")
+    L.append("### PoC (공격 페이지) — `clickjacking_poc.html` 로 저장 후 브라우저로 여세요")
+    L.append("```html")
+    L.append(poc_html.rstrip())
+    L.append("```")
+    L.append("")
+    if shot:
+        L.append("### 프레이밍 스크린샷 (증거)")
+        L.append("> 대상 페이지가 공격자 iframe(반투명) 안에 렌더링되고, 그 위에 미끼 버튼이 겹쳐진 모습.")
+        L.append("")
+        L.append(f"![clickjacking-poc](data:image/png;base64,{shot})")
+        L.append("")
+
+    L.append("## 재현 방법 (Steps to Reproduce)")
+    L.append(f"1. `{url}` 에 GET 요청을 전송합니다.")
+    L.append("2. 응답 헤더를 확인합니다.")
+    L.append("3. X-Frame-Options 헤더가 존재하지 않는 것을 확인합니다.")
+    L.append("4. Content-Security-Policy의 frame-ancestors 지시어가 존재하지 않는 것을 확인합니다.")
+    L.append("5. 위 PoC(`clickjacking_poc.html`)를 브라우저로 열어 대상 페이지가 iframe 내부에 렌더링되는 것을 "
+             "확인합니다(해당 페이지가 외부 iframe에 삽입될 수 있음을 확인).")
+    L.append("")
+
+    L.append("## 보안 영향도 (Risk)")
+    L.append("브라우저의 프레임 삽입 제한 정책이 적용되지 않아 클릭재킹 공격에 노출될 수 있습니다.")
+    L.append("")
+    L.append("사용자가 공격자가 제작한 웹페이지에서 의도하지 않은 버튼이나 기능을 클릭하도록 유도될 가능성이 "
+             "있으며, 민감한 기능이 존재할 경우 무단 행위가 발생할 수 있습니다.")
+    L.append("")
+
+    L.append("## 조치 방안 (Remediation)")
+    L.append("클릭재킹 방지를 위해 다음 중 하나 이상의 보안 설정을 적용하는 것을 권장합니다.")
+    L.append("")
+    L.append("- **X-Frame-Options 헤더 설정**")
+    L.append("  - `X-Frame-Options: DENY`")
+    L.append("  - 또는 `X-Frame-Options: SAMEORIGIN`")
+    L.append("- **Content-Security-Policy(CSP) 적용**")
+    L.append("  - `Content-Security-Policy: frame-ancestors 'none';`")
+    L.append("  - 또는 `Content-Security-Policy: frame-ancestors 'self';`")
+    L.append("")
+    L.append("가능한 경우 최신 브라우저 지원을 위해 CSP의 frame-ancestors 정책을 함께 적용하는 것을 권장합니다.")
+    L.append("")
+    return "\n".join(L)
+
+
 def finding_to_report_md(target: str, finding: Finding, index: int | None = None) -> str:
-    """Render one finding as a professional (HackerOne-style) English report."""
+    """Render one finding as a professional report (clickjacking uses the KR format)."""
+    if finding.module_id == "clickjacking":
+        return clickjacking_report_md(target, finding, index)
     m = classify(finding)
     sev = finding.severity.value
     num = f"{index}. " if index is not None else ""
@@ -138,6 +230,19 @@ def finding_to_report_md(target: str, finding: Finding, index: int | None = None
     L.append(f"curl -i -sk '{curl_url}'")
     L.append("```")
     L.append("")
+    ex = finding.extra or {}
+    if ex.get("poc_html"):
+        L.append(f"### PoC 파일 (저장하여 첨부) — `{finding.module_id}_poc.html`")
+        L.append("> 이 HTML을 파일로 저장한 뒤 (인가된) 로그인 세션의 브라우저에서 열어 재현/입증하세요.")
+        L.append("")
+        L.append("```html")
+        L.append(str(ex["poc_html"]).rstrip())
+        L.append("```")
+        L.append("")
+    if ex.get("screenshot_b64"):
+        L.append("### 증거 스크린샷")
+        L.append(f"![poc](data:image/png;base64,{ex['screenshot_b64']})")
+        L.append("")
 
     L.append("## HTTP Request")
     L.append("")
@@ -295,6 +400,7 @@ def to_html(target: str, findings: Iterable[Finding]) -> str:
             <div class="meta"><b>URL:</b> <code>{esc(f.url)}</code></div>
             {f'<p>{esc(f.description)}</p>' if f.description else ''}
             {f'<div class="lbl">Evidence</div><pre>{esc(f.evidence)}</pre>' if f.evidence else ''}
+            {f'<div class="lbl">Clickjacking PoC (framing proof)</div><img alt="clickjacking framing screenshot" style="max-width:100%;border:1px solid #ccc;border-radius:6px" src="data:image/png;base64,{f.extra.get("screenshot_b64")}">' if (f.extra or {}).get("screenshot_b64") else ''}
             {f'<div class="lbl">Request</div><pre>{esc(f.request)}</pre>' if f.request else ''}
             {f'<div class="lbl">Remediation</div><p>{esc(f.remediation)}</p>' if f.remediation else ''}
           </div>

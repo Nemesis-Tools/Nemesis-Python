@@ -310,7 +310,7 @@
 </footer>
 
 <div id="modal"><div class="mbox">
-  <div class="mhd"><b id="mtitle">보고서</b><span class="grow"></span><button id="mcopy">복사</button><button id="mclose">닫기</button></div>
+  <div class="mhd"><b id="mtitle">보고서</b><span class="grow"></span><button id="mpoc" style="display:none">PoC HTML</button><button id="mshot" style="display:none">스크린샷</button><button id="mcurl">PoC(curl)</button><button id="mevi">증거</button><button id="mcopy">복사</button><button id="mclose">닫기</button></div>
   <pre id="mbody"></pre>
 </div></div>
 
@@ -333,7 +333,7 @@ function beginCredPrompt(){
 }
 const SLASH=[['/help','명령어 목록'],['/start','스캔 시작 — 선택된 기법으로 실행 (/start [url])'],
   ['/attack','공격 기법 목록 (번호 입력 시 단독 실행) · /attack <검색어> 로 필터'],
-  ['/scan','스캔 시작 (/start 와 동일, /scan [url])'],['/login','자동 로그인 미리 설정'],
+  ['/login','자동 로그인 미리 설정'],
   ['/stop','스캔 중지'],['/status','대상/로그인/선택 상태'],['/clearlogin','로그인 정보 삭제'],['/clear','터미널 지우기']];
 function termLog(s){ const el=$('#log'); el.textContent+=s+'\n'; el.scrollTop=el.scrollHeight; }
 function setPwMode(on){ const el=$('#terminput'); el.type=on?'password':'text';
@@ -385,7 +385,7 @@ function handleTerm(val){
   else if(cmd==='login'){ loginState='url'; termLog('로그인 URL (엔터 = 대상 URL에서 폼 자동탐색):'); }
   else if(cmd==='clearlogin'){ loginCreds={login_url:'',username:'',password:''}; termLog('로그인 정보 삭제됨'); toast('로그인 정보 삭제','info'); }
   else if(cmd==='status') termLog('대상: '+($('#url').value||'(없음)')+'\n로그인: '+(loginCreds.username?('user='+loginCreds.username+(loginCreds.login_url?', url='+loginCreds.login_url:' (대상 URL 폼)')):'(미설정)')+'\n선택 기법: '+selectedModules().length+'개');
-  else if(cmd==='start'||cmd==='scan'){ if(parts[1]) $('#url').value=parts[1];
+  else if(cmd==='start'){ if(parts[1]) $('#url').value=parts[1];
     if(!$('#url').value.trim()){ termLog('✗ 대상 URL을 상단에 먼저 입력하세요.'); toast('대상 URL을 입력하세요','error'); return; }
     termLog('▶ 스캔 시작 — 선택된 기법 '+selectedModules().length+'개로 실행합니다.'); startScan(); }
   else if(cmd==='stop') stopScan();
@@ -572,7 +572,17 @@ function startPolling(){
   clearInterval(poller);clearInterval(framer);
   poller=setInterval(pollState,700); framer=setInterval(pollFrame,600); pollState();pollFrame();
 }
+// While the frameless window is being dragged, pywebview moves it on the main
+// thread; our live-view timers must yield or the drag stutters/freezes.
+let dragging=false, _dragTimer=null;
+function beginDrag(){ dragging=true; clearTimeout(_dragTimer); _dragTimer=setTimeout(endDrag, 2500); }
+function endDrag(){ if(!dragging) return; dragging=false; clearTimeout(_dragTimer); }
+let stateBusy=false;
 async function pollState(){
+  if(dragging) return;                                   // yield the main thread during window drag
+  if(stateBusy) return;                                  // don't stack overlapping polls
+  stateBusy=true;
+  try{
   const r=await fetch(`/api/state?logs=${logCur}&finds=${findCur}`); const s=await r.json();
   if(s.logs.length){$('#log').textContent+=s.logs.join('\n')+'\n';logCur=s.log_total;$('#log').scrollTop=$('#log').scrollHeight;}
   if(s.findings.length){s.findings.forEach(addFinding);findCur=s.find_total;$('#findcount').textContent=`(${findCur})`;}
@@ -588,10 +598,26 @@ async function pollState(){
     stopRecording(); setDot(stopped?'stop':'idle'); credPrompting=false; credState=null; setPwMode(false);
     if(findingsBuf.length) addReportFile();
     toast(stopped?'스캔이 중지되었습니다':`스캔 완료 · ${findCur}개 발견`, stopped?'info':'success', 3200);}
+  }catch(e){}
+  finally{ stateBusy=false; }
 }
+let prevFrameURL=null, frameBusy=false;
 async function pollFrame(){
-  const r=await fetch('/api/frame?t='+Date.now());
-  if(r.status===200){const b=await r.blob(); const u=URL.createObjectURL(b); $('#liveimg').src=u; drawToCanvas(u);}
+  if(dragging) return;                                   // yield the main thread during window drag
+  if(frameBusy) return;                                  // don't stack requests
+  const live=$('#live');
+  if(live && live.style.display==='none') return;        // panel hidden → skip work
+  frameBusy=true;
+  try{
+    const r=await fetch('/api/frame?t='+Date.now());
+    if(r.status===200){
+      const b=await r.blob(); const u=URL.createObjectURL(b);
+      $('#liveimg').src=u; drawToCanvas(u);
+      if(prevFrameURL) URL.revokeObjectURL(prevFrameURL); // free the previous frame (prevents memory buildup → freeze)
+      prevFrameURL=u;
+    }
+  }catch(e){}
+  finally{ frameBusy=false; }
 }
 // ---- live view recording (auto on scan start → downloadable .webm) ----
 function startRecording(){
@@ -631,10 +657,49 @@ function addFinding(f){
 function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 
 // ---- report modal ----
+function findingByIndex(i){ return findingsBuf.find(f=>f.index===i) || findingsBuf[i] || null; }
+function dlBlob(blob, name){ const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),4000); }
+function b64ToBytes(b64){ const bin=atob(b64); const u=new Uint8Array(bin.length); for(let k=0;k<bin.length;k++)u[k]=bin.charCodeAt(k); return u; }
+function slug(s){ return (s||'finding').replace(/[^a-z0-9_\-]+/gi,'_').slice(0,40); }
+// Reproduction (curl) + raw request note — works for ANY finding.
+function buildCurl(f){
+  let method='GET', url=f.url||''; const req=f.request||'';
+  const m=req.match(/^([A-Z]+)\s+(\S+)/); if(m){ method=m[1]; url=/^https?:/.test(m[2])?m[2]:(f.url||m[2]); }
+  const L=['# 재현 (PoC) — '+(f.title||''), '# 대상: '+(f.url||''), '# 심각도: '+(f.severity||'')+' / 신뢰도: '+(f.confidence||''), ''];
+  if(method==='GET'){ L.push(`curl -i -sk '${url}'`); }
+  else {
+    let c=`curl -i -sk -X ${method} '${url}'`;
+    const hm=req.match(/\(([A-Za-z0-9\-]+):\s*([^)]+)\)/); if(hm) c+=` -H '${hm[1]}: ${hm[2].trim()}'`;
+    const bm=req.match(/\(([^)]*=[^)]*)\)/); if(bm) c+=` --data '${bm[1]}'`;
+    L.push(c);
+  }
+  if(f.request) L.push('', '# 요청 메모: '+f.request);
+  return L.join('\n')+'\n';
+}
+function buildEvidence(f){
+  const ex=f.extra||{};
+  const L=['# 증거 (Evidence)', '',
+    '- 취약점: '+(f.title||''), '- 심각도: '+(f.severity||''), '- 신뢰도: '+(f.confidence||''),
+    '- 대상 URL: '+(f.url||''), '- 탐지 모듈: '+(f.module_id||''),
+    (f.request?'- 요청: '+f.request:''), '', '## 증거 내용', (f.evidence||'(없음)')];
+  if(ex.sensitive_actions&&ex.sensitive_actions.length) L.push('', '## 민감 기능(추정)', ex.sensitive_actions.join(', '));
+  if(f.remediation) L.push('', '## 조치 방안', f.remediation);
+  return L.filter(x=>x!==null&&x!==undefined).join('\n')+'\n';
+}
 async function showReport(i){
   const md=await (await fetch('/api/report?i='+i)).text();
   $('#mtitle').textContent='버그바운티 보고서';$('#mbody').textContent=md;$('#modal').classList.add('open');
   $('#mcopy').onclick=()=>{navigator.clipboard.writeText(md);toast('클립보드에 복사되었습니다','success');};
+  const f=findingByIndex(i)||{}, ex=(f&&f.extra)||{}, base=slug(f.module_id);
+  // Always-available proof files for every finding.
+  $('#mcurl').onclick=()=>{ dlBlob(new Blob([buildCurl(f)],{type:'text/plain'}), base+'_poc.txt'); toast('PoC(curl) 다운로드','success'); };
+  $('#mevi').onclick=()=>{ dlBlob(new Blob([buildEvidence(f)],{type:'text/markdown'}), base+'_evidence.md'); toast('증거 파일 다운로드','success'); };
+  // Rich HTML PoC / screenshot when the finding carries them (clickjacking, CSRF, CORS…).
+  const poc=$('#mpoc'), shot=$('#mshot');
+  if(ex.poc_html){ poc.style.display=''; poc.onclick=()=>{ dlBlob(new Blob([ex.poc_html],{type:'text/html'}), base+'_poc.html'); toast('PoC HTML 다운로드','success'); }; }
+  else poc.style.display='none';
+  if(ex.screenshot_b64){ shot.style.display=''; shot.onclick=()=>{ dlBlob(new Blob([b64ToBytes(ex.screenshot_b64)],{type:'image/png'}), base+'_poc.png'); toast('스크린샷 다운로드','success'); }; }
+  else shot.style.display='none';
 }
 async function downloadFullReport(){
   const md=await (await fetch('/api/report')).text();
@@ -693,6 +758,14 @@ $$('#stabs .tab').forEach(t=>t.onclick=()=>{
 setTimeout(()=>{ if(!window.pywebview) $('#titlebar').style.display='none'; }, 1500);
 $('#winmin').onclick=()=>{ try{ window.pywebview.api.minimize(); }catch(e){ termLog&&0; } };
 $('#winclose').onclick=()=>{ try{ window.pywebview.api.close(); }catch(e){ window.close(); } };
+// Titlebar drag uses pywebview's native frameless drag (the `.pywebview-drag-region`
+// class on #titlebar). We only pause the live-view polling while dragging so the
+// native move stays responsive; nothing else is intercepted.
+(function(){
+  const tb=$('#titlebar'); if(!tb) return;
+  tb.addEventListener('mousedown', e=>{ if(e.target && e.target.closest && e.target.closest('.winbtn')) return; beginDrag(); });
+  ['mouseup','pointerup','blur'].forEach(ev=>window.addEventListener(ev, endDrag));
+})();
 loadModules(); loadOpts();
 </script>
 </body>

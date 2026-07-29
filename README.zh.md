@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  基于 Selenium 的 Web 漏洞检测工具 · <b>HTTP/HTTPS</b> · <b>323 种</b>技术 · <b>HackerOne 格式报告（自动 CWE/CVSS）</b>
+  基于 Selenium 的 Web 漏洞检测工具 · <b>HTTP/HTTPS</b> · <b>329 种</b>技术 · <b>HackerOne 格式报告（自动 CWE/CVSS）</b>
 </p>
 
 ---
@@ -20,7 +20,7 @@ postMessage、CSP 弱点等）很容易被纯 HTTP 扫描器遗漏。此外，�
 也要花费大量时间。
 
 **Nemesis** 将真实浏览器自动化（Selenium）与 HTTP/HTTPS 检测融为一体：输入 URL、选择攻击技术，
-即可覆盖 **323 种**技术检测漏洞，并基于发现结果执行后续链式攻击，随后生成
+即可覆盖 **329 种**技术检测漏洞，并基于发现结果执行后续链式攻击，随后生成
 **自动映射 CWE/CVSS 的 HackerOne 格式报告**。它以带有 Logo 图标的**独立桌面应用**形式打包。
 
 > **同时支持 HTTP 与 HTTPS。** 仅输入域名时会**优先尝试 HTTPS，失败则回退到 HTTP**
@@ -30,12 +30,13 @@ postMessage、CSP 弱点等）很容易被纯 HTTP 扫描器遗漏。此外，�
 ## 目的
 
 - **覆盖面广** —— 涵盖 Injection、Client-Side、Auth/Access、Config、Exposures、
-  Exposed Panels、Misconfiguration、Tech/CVE、Recon 等 12 个类别、323 种技术。
+  Exposed Panels、Misconfiguration、Tech/CVE、Recon 等 12 个类别、329 种技术。
 - **真实浏览器验证** —— 用 Selenium 实际渲染 DOM、触发事件以降低误报，并实时推流扫描画面。
 - **链式攻击** —— 关联已确认的漏洞（如 SSRF→元数据、XSS→会话窃取、暴露的 .git→源码恢复）。
 - **可直接提交的产物** —— 自动映射 CWE/CVSS v3.1/OWASP/CAPEC，并在 HackerOne 格式 Markdown 中
   包含 PoC（curl）、原始 HTTP、复现步骤、影响与修复建议。
-- **安全默认值** —— 非破坏性载荷、请求限速（非 DoS），未配置 canary 时自动跳过 OOB 系列。
+- **安全默认值** —— 非破坏性载荷、请求限速（非 DoS）。盲注系列在配置 canary 时通过 OOB 确认，
+  未配置时以带内检测执行（详见[责任](#责任)）。
 
 ## 责任
 
@@ -44,17 +45,22 @@ postMessage、CSP 弱点等）很容易被纯 HTTP 扫描器遗漏。此外，�
 
 - 禁止扫描范围外目标，并保持足够的请求间隔。
 - 所有载荷均为**非破坏性检测**，并应用请求限速（非 DoS）与安全默认值。
-- SSRF、Log4Shell、XXE、Blind XSS、RFI 等盲注系列**仅回调到你自己掌控的 canary 域名**。
-  未配置时自动跳过（不会回调内部/第三方主机）。
+- **凭证测试（暴力/填充/喷洒）** 仅用于已授权目标 —— 会限速、限制尝试次数，并在**检测到锁定/限速
+  信号时立即停止**（绝不锁定真实账户）。**默认关闭（opt-in）**，需显式选择才会运行。
 - 确认每个发现的置信度（`Confirmed`/`Firm`/`Tentative`）并进行人工验证。
 - 不要夸大报告标题或严重程度（以事实与证据为准）。泄露的个人账户（暴露的账号/密码）不在范围内。
 
-### 不会自动化的内容（诚实的范围界定）
+### 授权时的扩展执行（高级）
+> 以下项目应授权工程师要求启用。请保留安全防护（限速、尝试上限、锁定检测）。
+- **盲注系列（SSRF、Log4Shell、XXE、Blind XSS、RFI）** 现在**即使未配置 canary 也会直接执行**。
+  有 canary 时通过 OOB 回调确认；没有时使用**带内检测**（SSRF=云元数据反射、RFI=include 报错、
+  XXE=本地文件泄露、Blind XSS=存储/反射标记）并报告候选。
+- **凭证测试** —— `credential_testing` 模块（暴力/填充/喷洒）；opt-in、限速、锁定感知。
+- **竞态条件/TOCTOU · 供应链 · XS-Leaks · mXSS · 容器与 K8s 逃逸** —— 专用检测模块呈现候选（非破坏）。
+  真实利用（如并行请求）由研究者在范围内验证。
+
+### 仍不自动化的内容
 - **DoS/DDoS/Slowloris/ReDoS/Billion Laughs** —— 会导致服务瘫痪/滥用，未实现。
-- **暴力破解/凭证填充/密码喷洒** —— 会造成账户锁定/滥用，不执行；而是检测使其可能的弱点
-  （缺少限速、MFA、CAPTCHA）。
-- **竞态条件/TOCTOU/容器与 K8s 逃逸/供应链/XS-Leaks/mXSS** —— 依赖上下文，仅呈现候选项，
-  真实利用验证由研究者完成。
 
 ## 运行方法
 
@@ -102,8 +108,8 @@ powershell -ExecutionPolicy Bypass -File build_web_exe.ps1
 - **Start** 按钮不再立即扫描，而是把输入的 URL 打开到 **Attack Viewer** 中。你可以在画面上
   **直接点击、输入、滚动**（实时转发到服务器端 Chrome），并使用顶部**地址栏**进行导航／后退／
   前进／刷新。
-- 扫描**不会自动开始**。把页面调整到所需状态后，在终端输入 **`/start`**（或 `/scan`，
-  或攻击编号）才会执行。查看器随即切换为实时扫描画面，地址栏显示当前扫描目标 URL。
+- 扫描**不会自动开始**。把页面调整到所需状态后，在终端输入 **`/start`**（或攻击编号）
+  才会执行。查看器随即切换为实时扫描画面，地址栏显示当前扫描目标 URL。
 
 ## 终端命令
 
@@ -113,7 +119,6 @@ powershell -ExecutionPolicy Bypass -File build_web_exe.ps1
 |---|---|
 | `/start [url]` | **开始扫描** —— 使用已选技术执行（在查看器中准备好后用此命令运行） |
 | `/attack [关键字]` | 按编号列出攻击技术 → **输入编号即可单独执行该攻击** |
-| `/scan [url]` | 开始扫描（`/start` 的别名） |
 | `/login` | 交互式自动登录设置（URL → 账号 → 密码） |
 | `/status` | 查看当前扫描状态 |
 | `/stop` | 停止进行中的扫描 |

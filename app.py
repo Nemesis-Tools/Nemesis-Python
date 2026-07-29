@@ -104,16 +104,24 @@ def main() -> int:
     # Set the window/taskbar icon once the window appears.
     threading.Thread(target=_apply_window_icon, daemon=True).start()
 
+    # Keep the pywebview Window OUT of the js_api object's attributes: pywebview
+    # serializes the api object's graph, and a Window reference makes it walk into
+    # window.native.browser.webview.CoreWebView2 — a COM object that may only be
+    # touched on the UI thread, which intermittently crashes the process. We capture
+    # the window in a closure cell instead so the api holds no window reference.
+    _win = {"w": None}
+
     class WindowApi:
-        window = None
         def minimize(self):
             try:
-                if self.window: self.window.minimize()
+                w = _win["w"]
+                if w: w.minimize()
             except Exception:
                 pass
         def close(self):
             try:
-                if self.window: self.window.destroy()
+                w = _win["w"]
+                if w: w.destroy()
             except Exception:
                 pass
 
@@ -123,7 +131,7 @@ def main() -> int:
         width=1440, height=920, min_size=(1024, 660),
         frameless=True, easy_drag=False, js_api=api,
     )
-    api.window = window
+    _win["w"] = window
     webview.start()   # blocks until the window is closed
     return 0
 

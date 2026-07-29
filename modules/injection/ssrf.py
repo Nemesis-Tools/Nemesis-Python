@@ -13,6 +13,8 @@ Detection:
 """
 from __future__ import annotations
 
+import re
+
 from modules.base import BaseModule, ScanContext, register
 from core.result import Finding, Severity
 from core.injection_points import discover_points, send
@@ -20,6 +22,19 @@ from core.injection_points import discover_points, send
 # Request headers that are commonly SSRF-able (server fetches the value).
 SSRF_HEADERS = ["Referer", "X-Forwarded-Host", "X-Forwarded-For", "Forwarded",
                 "True-Client-IP", "X-Real-IP", "X-Client-IP", "CF-Connecting-IP"]
+
+# In-band SSRF: cloud metadata endpoints whose contents, if reflected in the
+# response, prove a server-side fetch happened (no OOB canary needed).
+_META = [
+    ("http://169.254.169.254/latest/meta-data/",
+     re.compile(r"ami-id|instance-id|iam/|placement|public-keys|hostname", re.I)),
+    ("http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+     re.compile(r"AccessKeyId|SecretAccessKey|Token|Role", re.I)),
+    ("http://metadata.google.internal/computeMetadata/v1/instance/?recursive=true",
+     re.compile(r"serviceAccounts|projectId|machineType|zone", re.I)),
+    ("http://100.100.100.200/latest/meta-data/",              # Alibaba Cloud
+     re.compile(r"region-id|instance-id|image-id", re.I)),
+]
 
 
 @register
@@ -39,11 +54,58 @@ class SSRF(BaseModule):
             host,
         ]
 
+    def _inband(self, ctx: ScanContext) -> list[Finding]:
+        """No canary: run SSRF directly using in-band cloud-metadata detection."""
+        findings: list[Finding] = []
+        points = discover_points(ctx)
+        ctx.log(f"    (no canary) in-band SSRF: probing metadata via {len(points)} param point(s) + headers")
+        for pt in points:
+            if ctx.should_stop():
+                break
+            for url, sig in _META:
+                if ctx.should_stop():
+                    break
+                r = send(ctx, pt, url)
+                if r is not None and sig.search((r.text or "")[:6000]):
+                    findings.append(Finding(
+                        module_id=self.id, title=f"SSRF (cloud metadata) via {pt.label()}",
+                        severity=Severity.HIGH, url=pt.base_url, confidence="Firm",
+                        description="Injecting a cloud-metadata URL returned metadata content in the response — "
+                                    "an in-band SSRF reaching the instance metadata service.",
+                        evidence=f"payload {url} -> metadata signature matched",
+                        request=f"{pt.method} {pt.base_url} ({pt.param}={url})",
+                        impact="메타데이터 IAM 자격증명 탈취 → 클라우드 계정 피벗.",
+                        remediation="Block link-local/metadata IPs; require IMDSv2; allow-list outbound URLs."))
+                    return findings
+        for header in SSRF_HEADERS:
+            if ctx.should_stop():
+                break
+            url, sig = _META[0]
+            try:
+                r = ctx.paced_request("GET", ctx.target, headers={header: url})
+            except Exception:
+                r = None
+            if r is not None and sig.search((r.text or "")[:6000]):
+                findings.append(Finding(
+                    module_id=self.id, title=f"SSRF (cloud metadata) via '{header}' header",
+                    severity=Severity.HIGH, url=ctx.target, confidence="Firm",
+                    description=f"The server fetched a metadata URL supplied in the '{header}' header (in-band SSRF).",
+                    evidence=f"{header}: {url} -> metadata signature matched",
+                    remediation="Do not build server requests from client-supplied host/URL headers."))
+                return findings
+        findings.append(Finding(
+            module_id=self.id, title="SSRF in-band probes sent — no metadata reflected",
+            severity=Severity.INFO, url=ctx.target, confidence="Tentative",
+            description="In-band SSRF payloads (cloud metadata/internal) were injected but nothing was reflected. "
+                        "Blind SSRF may still exist — configure an OOB canary for callback confirmation.",
+            evidence="metadata endpoints probed on params + SSRF-prone headers",
+            remediation="Configure an OOB canary/poll URL to confirm blind SSRF."))
+        return findings
+
     def run(self, ctx: ScanContext) -> list[Finding]:
         oob = ctx.oob
         if oob is None or not oob.enabled:
-            ctx.log("    OOB canary domain not configured — skipping SSRF (safe default).")
-            return []
+            return self._inband(ctx)
 
         findings: list[Finding] = []
         tested: list[str] = []

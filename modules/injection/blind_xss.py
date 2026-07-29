@@ -29,11 +29,49 @@ class BlindXSS(BaseModule):
             f'javascript:eval(atob("")) //{u}',
         ]
 
+    def _inband(self, ctx: ScanContext) -> list[Finding]:
+        """No canary: inject unique markers, then re-fetch to catch stored/reflected XSS."""
+        points = discover_points(ctx)
+        if not points:
+            return []
+        marker = "nmxss9271q"
+        payloads = [f'"><img src=x onerror=1 data-{marker}>',
+                    f"'><svg onload=1 data-{marker}>",
+                    f'<b data-{marker}>{marker}</b>']
+        ctx.log(f"    (no canary) blind XSS: injecting markers into {len(points)} point(s), then re-checking")
+        for pt in points:
+            if ctx.should_stop():
+                break
+            for p in payloads:
+                if ctx.should_stop():
+                    break
+                send(ctx, pt, p)
+        reflected = False
+        try:
+            r = ctx.paced_get(ctx.target)
+            reflected = marker in (r.text or "")
+        except Exception:
+            pass
+        if reflected:
+            return [Finding(
+                module_id=self.id, title="Stored/reflected XSS marker persisted (in-band)",
+                severity=Severity.MEDIUM, url=ctx.target, confidence="Tentative",
+                description="An injected XSS marker was returned on a later page load, indicating the input is "
+                            "stored/reflected unencoded — a stored-XSS candidate. Verify execution context manually.",
+                evidence=f"marker '{marker}' found in response after injection",
+                remediation="Context-aware output encoding; sanitize stored content; CSP.")]
+        return [Finding(
+            module_id=self.id, title="Blind XSS payloads sent (no canary) — no in-band reflection",
+            severity=Severity.INFO, url=ctx.target, confidence="Tentative",
+            description="Blind/stored XSS payloads were injected but no marker reflected in-band. It may still fire "
+                        "later in another context (e.g. an admin panel) — configure an OOB canary to catch that.",
+            evidence="markers injected into all discovered points",
+            remediation="Configure an OOB poll URL for auto-confirmation of blind/stored XSS.")]
+
     def run(self, ctx: ScanContext) -> list[Finding]:
         oob = ctx.oob
         if oob is None or not oob.enabled:
-            ctx.log("    OOB canary not configured — skipping blind XSS (safe default).")
-            return []
+            return self._inband(ctx)
         points = discover_points(ctx)
         if not points:
             return []
