@@ -80,6 +80,14 @@ _PROTOTYPES = [
     ("sqli", "Firm", "Payload ' -> Unclosed quotation mark after the character string (Microsoft SQL Server error)", "High", {}, 1),
     ("sqli", "Firm", "Payload ' -> ORA-01756: quoted string not properly terminated (Oracle)", "High", {}, 1),
     ("sqli", "Firm", "Payload ' -> SQLite3::SQLException: unrecognized token", "High", {}, 1),
+    ("sqli", "Confirmed", "DBMS: MySQL Error signature: 'You have an error in your SQL syntax'; Extracted DB version: 8.0.32-0ubuntu", "High", {}, 1),
+    ("sqli", "Confirmed", "DBMS: Microsoft SQL Server; Extracted DB version: Microsoft SQL Server 2019 (RTM) 15.0.2000", "High", {}, 1),
+    ("sqli", "Firm", "len(baseline)=5120 len(TRUE)=5128 len(FALSE)=1204 (TRUE approximately baseline, FALSE diverges) boolean-based", "High", {}, 1),
+    ("sqli", "Firm", "DBMS: MySQL Baseline latency: 0.21s Delayed (4s) latency: 4.33s time-based blind", "High", {}, 1),
+    ("sqli", "Firm", "DBMS: PostgreSQL pg_sleep time delay confirmed 5.0s vs 0.3s baseline", "High", {}, 1),
+    # SQLi FP: boolean length differs only due to dynamic page content (TRUE not baseline-matched).
+    ("sqli", "Tentative", "len(TRUE)=5000 len(FALSE)=5300 diff=300 dynamic content, TRUE not baseline-matched", "Medium", {}, 0),
+    ("sqli", "Tentative", "single quote reflected but no DB error and no boolean divergence — candidate only", "Low", {}, 0),
     ("sqli_blind_time", "Firm", "Boolean/time payload: response delayed 5.1s on SLEEP(5), 0.2s on baseline (absent in baseline)", "High", {}, 1),
     ("command_injection", "Firm", "Payload ';id' -> uid=0(root) gid=0(root) groups=0(root) signature matched", "Critical", {}, 1),
     ("command_injection", "Firm", "Payload '|whoami' -> nt authority\\system reflected", "Critical", {}, 1),
@@ -158,50 +166,80 @@ def _augment(vec, jitter=0.05):
             else min(1.0, max(0.0, v + random.uniform(-jitter, jitter))) for v in vec]
 
 
-def build_dataset(n_per=10):
-    X, Y = [], []
-    for (mid, conf, ev, sev, extra, label) in _PROTOTYPES:
-        base = extract_features(_Row(mid, conf, ev, sev, extra))
-        X.append(base); Y.append(float(label))
-        for _ in range(n_per):
-            X.append(_augment(base)); Y.append(float(label))
+def _base_rows():
+    """Deduplicated BASE feature rows (no augmentation) → (features, label).
 
+    Kept separate from augmentation so the train/val split happens on distinct
+    base examples: jittered copies of a validation row must never leak into
+    training (which would inflate metrics).
+    """
+    rows = []
+    for (mid, conf, ev, sev, extra, label) in _PROTOTYPES:
+        rows.append((extract_features(_Row(mid, conf, ev, sev, extra)), float(label)))
     # Per-technique examples derived from EVERY template's own detection signature
     # → the model learns each of the ~250 technique signatures (covers all modules).
     templates = _load_templates()
-    n_tpl = 0
     for t in templates:
         sev = t.get("severity", "info")
-        # TP: the technique's real signature was observed.
-        tp = _Row(t["id"], "Firm", _tpl_evidence_tp(t), sev, {})
-        X.append(extract_features(tp)); Y.append(1.0)
-        # FP: catch-all/soft-404 shell with no specific signature.
-        fp = _Row(t["id"], "Tentative", _tpl_evidence_fp(t), sev, {})
-        X.append(extract_features(fp)); Y.append(0.0)
-        X.append(_augment(extract_features(tp))); Y.append(1.0)
-        X.append(_augment(extract_features(fp))); Y.append(0.0)
-        n_tpl += 1
-    print(f"[*] template-derived techniques: {n_tpl}")
-    # Merge user feedback if present.
+        rows.append((extract_features(_Row(t["id"], "Firm", _tpl_evidence_tp(t), sev, {})), 1.0))
+        rows.append((extract_features(_Row(t["id"], "Tentative", _tpl_evidence_fp(t), sev, {})), 0.0))
+    print(f"[*] base rows: {len(rows)} (templates: {len(templates)})")
+    return rows
+
+
+def _feedback_rows():
+    """Real ground-truth labels from feedback.jsonl → (features, label, weight).
+
+    Human thumbs-up/down (models/feedback.jsonl, no source) are the strongest
+    signal; LLM-agent verdicts (source:"gemini"/"claude"/"llm") are trusted but
+    weighted a little lower — the local model *learns from the LLM* without being
+    dominated by it. Returned rows go into TRAINING only (never the held-out val).
+    """
     fb = os.path.join(MODELS, "feedback.jsonl")
-    n_fb = 0
-    if os.path.exists(fb):
-        for line in open(fb, encoding="utf-8"):
-            line = line.strip()
-            if not line:
+    out, n_human, n_llm = [], 0, 0
+    if not os.path.exists(fb):
+        return out, n_human, n_llm
+    for line in open(fb, encoding="utf-8"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+            feats, lab = d.get("features"), d.get("label")
+            if not (isinstance(feats, list) and len(feats) == N_IN and lab in (0, 1)):
                 continue
-            try:
-                d = json.loads(line)
-                feats = d.get("features")
-                lab = d.get("label")
-                if isinstance(feats, list) and len(feats) == N_IN and lab in (0, 1):
-                    # weight feedback heavily (repeat) — it's real ground truth
-                    for _ in range(6):
-                        X.append(list(map(float, feats))); Y.append(float(lab))
-                    n_fb += 1
-            except Exception:
-                continue
-    return X, Y, n_fb
+            if d.get("source") in ("gemini", "claude", "llm"):
+                w = 4; n_llm += 1
+            else:
+                w = 6; n_human += 1
+            out.append((list(map(float, feats)), float(lab), w))
+        except Exception:
+            continue
+    return out, n_human, n_llm
+
+
+def build_dataset(val_frac=0.15, n_per=10):
+    """Split base rows into train/val, augment TRAINING ONLY, fold feedback into train."""
+    base = _base_rows()
+    random.shuffle(base)
+    n_val = max(1, int(len(base) * val_frac))
+    val_rows, train_rows = base[:n_val], base[n_val:]
+
+    X_tr, Y_tr = [], []
+    for feats, lab in train_rows:
+        X_tr.append(feats); Y_tr.append(lab)
+        for _ in range(n_per):
+            X_tr.append(_augment(feats)); Y_tr.append(lab)
+
+    X_val = [f for f, _ in val_rows]
+    Y_val = [y for _, y in val_rows]
+
+    fb_rows, n_human, n_llm = _feedback_rows()
+    for feats, lab, w in fb_rows:
+        for _ in range(w):
+            X_tr.append(feats); Y_tr.append(lab)
+    print(f"[*] feedback merged into TRAIN: human={n_human}, llm={n_llm}")
+    return X_tr, Y_tr, X_val, Y_val, {"human": n_human, "llm": n_llm}
 
 
 def train(X, Y, epochs=240, lr=0.15):
@@ -246,21 +284,28 @@ def train(X, Y, epochs=240, lr=0.15):
 
 
 def main():
-    X, Y, n_fb = build_dataset()
-    print(f"[*] dataset: {len(X)} samples ({int(sum(Y))} TP / {int(len(Y)-sum(Y))} FP), "
-          f"feedback rows merged: {n_fb}")
-    model = train(X, Y)
-    # quick train accuracy
-    correct = 0
+    X_tr, Y_tr, X_val, Y_val, fb = build_dataset()
+    print(f"[*] train: {len(X_tr)} samples ({int(sum(Y_tr))} TP / {int(len(Y_tr)-sum(Y_tr))} FP)")
+    print(f"[*] val:   {len(X_val)} samples ({int(sum(Y_val))} TP / {int(len(Y_val)-sum(Y_val))} FP)")
+    model = train(X_tr, Y_tr)
+
     from core.ml_model import _MLP
+    from core import metrics
     m = _MLP(model)
-    for x, y in zip(X, Y):
-        correct += int((m.predict_proba(x) >= 0.5) == (y >= 0.5))
-    print(f"[*] train accuracy: {correct/len(X):.3f}")
+    tr_scores = [m.predict_proba(x) for x in X_tr]
+    va_scores = [m.predict_proba(x) for x in X_val]
+    print(metrics.format_report(metrics.report(Y_tr, tr_scores), "train"))
+    print(metrics.format_report(metrics.report(Y_val, va_scores), "val (held-out)"))
+
+    # Persist the held-out validation metrics alongside the model (provenance).
+    val_m = metrics.report(Y_val, va_scores)
+    model["eval"] = {k: (None if val_m[k] != val_m[k] else round(val_m[k], 4))
+                     for k in ("precision", "recall", "f1", "accuracy", "roc_auc")}
+    model["eval"]["feedback"] = fb
     out = os.path.join(MODELS, "vuln_model.json")
     with open(out, "w", encoding="utf-8") as fh:
         json.dump(model, fh)
-    print(f"[*] wrote {out}")
+    print(f"[*] wrote {out}  (val F1={model['eval']['f1']}, ROC-AUC={model['eval']['roc_auc']})")
 
 
 if __name__ == "__main__":

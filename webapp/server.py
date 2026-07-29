@@ -52,6 +52,12 @@ class ScanSession:
             self.need_login = False
             self._cred_event = threading.Event()
             self._creds = None
+            # Gemini AI agent (/test): runs alongside the ML model.
+            self.llm_running = False
+            self.llm_result_md = ""
+            # SAST source-code analysis (/sast).
+            self.sast_running = False
+            self.sast_result_md = ""
 
     def on_need_credentials(self):
         """Blocking callback for the scanner: signal the UI to collect creds."""
@@ -125,12 +131,86 @@ class ScanSession:
                 "findings": new_finds,
                 "target": self.target,
                 "need_login": self.need_login,
+                "llm_running": self.llm_running,
+                "llm_result": self.llm_result_md,
+                "sast_running": self.sast_running,
+                "sast_result": self.sast_result_md,
             }
 
     def submit_credentials(self, creds: dict) -> None:
         with self.lock:
             self._creds = creds
         self._cred_event.set()
+
+    # ---- Gemini AI agent (/test) ----
+    def start_llm_test(self, target: str, api_key: str, models_dir: str) -> bool:
+        with self.lock:
+            if self.running or self.llm_running:
+                return False
+            self.llm_running = True
+            self.llm_result_md = ""
+            if not self.target:
+                self.target = target
+            findings = list(self.findings)
+        t = threading.Thread(target=self._run_llm_test,
+                             args=(target, api_key, models_dir, findings), daemon=True)
+        t.start()
+        return True
+
+    def _run_llm_test(self, target: str, api_key: str, models_dir: str, findings) -> None:
+        from core import llm_agent
+        try:
+            self.on_log("\n########## 🤖 GEMINI AI 취약점 분석 에이전트 (/test) ##########")
+            self.on_log(f"[*] 대상: {target}  ·  스캐너 결과 {len(findings)}건을 함께 분석")
+            res = llm_agent.analyze(target, findings, api_key=api_key or None,
+                                    log=self.on_log)
+            if not res.get("ok"):
+                self.on_log(f"[!] Gemini 분석 실패: {res.get('error')}")
+                if res.get("raw"):
+                    self.on_log(f"    응답: {res['raw'][:300]}")
+                return
+            md = llm_agent.format_report(target, res)
+            with self.lock:
+                self.llm_result_md = md
+            for line in md.splitlines():
+                self.on_log(line)
+            # The ML/DL model learns from Gemini's high-confidence verdicts.
+            llm_agent.learn_from_llm(findings, res["analysis"], models_dir,
+                                        log=self.on_log)
+            self.on_log("[*] Gemini 분석 완료. (딥러닝/ML 모델과 병행 동작)")
+        except Exception as e:
+            self.on_log(f"[!] Gemini 에이전트 오류: {e}")
+        finally:
+            with self.lock:
+                self.llm_running = False
+
+    # ---- SAST source-code analysis (/sast) ----
+    def start_sast(self, path: str) -> bool:
+        with self.lock:
+            if self.running or self.sast_running:
+                return False
+            self.sast_running = True
+            self.sast_result_md = ""
+        t = threading.Thread(target=self._run_sast, args=(path,), daemon=True)
+        t.start()
+        return True
+
+    def _run_sast(self, path: str) -> None:
+        from core.sast import scan
+        try:
+            self.on_log("\n########## 🔬 SAST 소스코드 취약점 분석 (/sast) ##########")
+            res = scan.scan_path(path, log=self.on_log)
+            md = scan.format_report(res)
+            with self.lock:
+                self.sast_result_md = md
+            for line in md.splitlines():
+                self.on_log(line)
+            self.on_log("[*] SAST 분석 완료.")
+        except Exception as e:
+            self.on_log(f"[!] SAST 오류: {e}")
+        finally:
+            with self.lock:
+                self.sast_running = False
 
 
 class _dummy:
@@ -209,11 +289,20 @@ def create_app() -> Flask:
             "crawl": o.get("crawl", False),
             "max_depth": int(o.get("max_depth", 2)),
             "max_pages": int(o.get("max_pages", 15)),
+            "agent": o.get("agent", False),
             "guided": data.get("guided", False),
             # Verification model (true-positive promotion + false-positive filtering).
             "fp_filter": o.get("fp_filter", True),
             "min_score": int(o.get("min_score", 38)),
             "review_strict": o.get("review_strict", True),
+            # Program policy: lower low-risk categories to Low (chain breaches excluded).
+            "program_policy": o.get("program_policy", True),
+            "sandbox_domains": o.get("sandbox_domains", ""),
+            # Time-based blind SQLi (adds latency; captures raw proof + DB version).
+            "sqli_time": o.get("sqli_time", True),
+            "sqli_time_sec": int(o.get("sqli_time_sec", 4)),
+            # Re-run confirmed GET attacks in the Selenium browser + screenshot evidence.
+            "browser_evidence": o.get("browser_evidence", True),
         }
         # A scan needs its own browser; hand the live view over from any
         # interactive preview session.
@@ -280,6 +369,37 @@ def create_app() -> Flask:
             "password": data.get("password", ""),
             "login_url": data.get("login_url", ""),
         })
+        return jsonify({"ok": True})
+
+    @app.route("/api/test", methods=["POST"])
+    def api_test():
+        """Launch the Gemini AI vulnerability-analysis agent (runs with the ML model)."""
+        from core import llm_agent
+        data = request.get_json(force=True) or {}
+        target = (data.get("target") or "").strip()
+        api_key = (data.get("api_key") or "").strip()
+        if not target:
+            return jsonify({"error": "대상 URL을 입력하세요."}), 400
+        if not llm_agent.available():
+            return jsonify({"error": "google-genai SDK 미설치 — pip install google-genai"}), 400
+        if not llm_agent.key_available(api_key):
+            return jsonify({"error": "Gemini API 토큰이 필요합니다.", "need_key": True}), 400
+        mdir = os.path.join(_ROOT, "models")
+        if not session.start_llm_test(target, api_key, mdir):
+            return jsonify({"error": "스캔/분석이 이미 진행 중입니다."}), 409
+        return jsonify({"ok": True})
+
+    @app.route("/api/sast", methods=["POST"])
+    def api_sast():
+        """Launch SAST source-code analysis (heuristic CWE rules + optional CodeBERT)."""
+        data = request.get_json(force=True) or {}
+        path = (data.get("path") or "").strip()
+        if not path:
+            return jsonify({"error": "소스 파일/폴더 경로를 입력하세요 (/sast <경로>)."}), 400
+        if not os.path.exists(os.path.expanduser(path.strip('"'))):
+            return jsonify({"error": f"경로를 찾을 수 없습니다: {path}"}), 400
+        if not session.start_sast(path):
+            return jsonify({"error": "스캔/분석이 이미 진행 중입니다."}), 409
         return jsonify({"ok": True})
 
     @app.route("/api/state")

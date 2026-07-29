@@ -55,6 +55,10 @@ class ReflectedXSS(BaseModule):
                 continue
             ctx.browser.dismiss_alert()
             if self._sentinel_fired(driver):
+                # Visible-proof variant: same payload but pops an alert, so the browser
+                # re-execution (scanner) captures a screenshot + alert text as evidence.
+                alert_payload = payload.replace(f"window.{SENTINEL}=1", "alert('XSS-by-Nemesis')")
+                proof_url = build_url_with_param(url, name, alert_payload)
                 return Finding(
                     module_id=self.id,
                     title=f"Reflected XSS in query parameter '{name}'",
@@ -66,6 +70,7 @@ class ReflectedXSS(BaseModule):
                     evidence=f"Payload executed (window.{SENTINEL} set): {payload}",
                     request=f"GET {test_url}",
                     remediation="Context-aware output encoding; apply a strict Content-Security-Policy.",
+                    extra={"attack": {"method": "GET", "url": proof_url}},
                 )
             self._reset(driver)
         return None

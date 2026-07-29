@@ -5,7 +5,7 @@ import re
 
 from modules.base import BaseModule, ScanContext, register
 from core.result import Finding, Severity
-from core.injection_points import discover_points, send
+from core.injection_points import discover_points, send, attack_url
 
 PAYLOADS = [
     "../../../../../../etc/passwd",
@@ -60,7 +60,8 @@ class PathTraversal(BaseModule):
                         request=f"{pt.method} {pt.base_url}  ({pt.param}=<payload>)",
                         remediation="Never build file paths from user input; use allow-lists / canonicalize & confine.",
                         extra={"chain": {"type": "lfi", "method": pt.method, "base_url": pt.base_url,
-                                         "param": pt.param, "base_params": pt.base_params, "where": pt.where}},
+                                         "param": pt.param, "base_params": pt.base_params, "where": pt.where},
+                               "attack": {"method": pt.method, "url": attack_url(pt, payload)}},
                     ))
                     break
         return findings

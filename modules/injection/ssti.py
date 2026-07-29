@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from modules.base import BaseModule, ScanContext, register
 from core.result import Finding, Severity
-from core.injection_points import discover_points, send
+from core.injection_points import discover_points, send, attack_url
 
 A, B = 1337, 1337
 PRODUCT = str(A * B)  # 1787569
@@ -62,6 +62,7 @@ class SSTI(BaseModule):
                         evidence=f"Payload {payload!r} rendered to include {PRODUCT}.",
                         request=f"{pt.method} {pt.base_url}  ({pt.param}=<payload>)",
                         remediation="Never render user input as a template; use sandboxed logic-less templates.",
+                        extra={"attack": {"method": pt.method, "url": attack_url(pt, payload)}},
                     ))
                     break  # one confirmed engine per point is enough
         return findings

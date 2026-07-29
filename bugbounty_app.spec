@@ -22,8 +22,10 @@ _d, _b, _h = collect_all("selenium")
 datas += _d; binaries += _b; hiddenimports += _h
 datas += collect_data_files("certifi")
 
-# pywebview + .NET backend (pythonnet)
-for pkg in ("webview", "pythonnet", "clr_loader"):
+# pywebview + .NET backend (pythonnet); Gemini AI agent (/test, optional)
+for pkg in ("webview", "pythonnet", "clr_loader",
+            "google.genai", "google.auth", "websockets", "pydantic",
+            "pydantic_core", "anyio", "sniffio", "certifi"):
     try:
         _d, _b, _h = collect_all(pkg)
         datas += _d; binaries += _b; hiddenimports += _h

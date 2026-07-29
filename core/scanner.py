@@ -33,6 +33,9 @@ from core.result import Finding, Severity
 from core.crawler import extract_links, normalize, registrable
 from core import chain
 from core import verifier
+from core import policy
+from core import evidence
+from core import agent
 from modules.base import ScanContext, get_module
 
 # Modules whose result depends on the specific URL/parameters (run per page).
@@ -186,6 +189,20 @@ class Scanner:
                 self._log(f"    [verify] drop FP (score {res['score']}<{min_score}, "
                           f"{f.confidence}): {(f.title or '')[:60]}")
                 continue
+            # Re-execute the confirmed GET attack IN the Selenium browser (visible on
+            # the live Attack Viewer) and capture a screenshot as visual evidence.
+            atk = (f.extra or {}).get("attack")
+            if opt.get("browser_evidence", True) and atk and atk.get("url") \
+                    and str(atk.get("method", "GET")).upper() == "GET" and not self._stop.is_set():
+                self._log(f"    [selenium] 실제 공격 실행·캡처: {atk['url'][:90]}")
+                cap = evidence.browser_screenshot(ctx, atk["url"])
+                if cap.get("screenshot_b64"):
+                    f.extra["screenshot_b64"] = cap["screenshot_b64"]
+                if cap.get("alert"):
+                    f.extra.setdefault("proof", {})["browser_alert"] = cap["alert"]
+            # Program-policy: lower known low-risk categories to Low (chain findings excluded).
+            if policy.apply_policy(f, opt):
+                self._log(f"    [policy] 저위험 분류 → Low: {(f.title or '')[:50]}")
             self._seen.add(key)
             self.findings.append(f)
             self.on_finding(f)
@@ -394,6 +411,10 @@ class Scanner:
             browser.start()
             browser.apply_identity(extra_headers=opt.get("extra_headers") or None,
                                    cookies=opt.get("cookies") or None, base_url=self.target)
+            if self.on_frame:
+                browser.start_stream(0.15)     # smooth continuous live view (~7 fps) during the scan
+            if opt.get("agent"):
+                self._log("🤖 AI 공격 에이전트: 사이트 크롤·메뉴 이동 → 취약점 분석(ML 검증) → 실제 공격·체인 실행")
             # Optional authenticated scanning (non-guided): log in up front.
             if not opt.get("guided"):
                 self._auto_login(browser, http, opt)
@@ -538,7 +559,16 @@ class Scanner:
                 visited.add(key)
                 pages_done += 1
                 ctx.target = url
-                self._log(f"\n########## PAGE {pages_done}/{max_pages} (depth {depth}): {url} ##########")
+                prio = agent.target_priority(url)
+                self._log(f"\n########## PAGE {pages_done}/{max_pages} (depth {depth}, "
+                          f"공격우선도 {prio:.2f}): {url} ##########")
+                # Agent walks to this page in the real browser (visible on the live view).
+                if self.on_frame:
+                    try:
+                        browser.get(url)
+                        browser.dismiss_alert()
+                    except Exception:
+                        pass
 
                 for mid in page_mods:
                     if self._stop.is_set():
@@ -562,6 +592,8 @@ class Scanner:
                             if normalize(link) not in visited and len(queue) + pages_done < max_pages * 3:
                                 queue.append((link, depth + 1))
                                 added += 1
+                        # ML-guided agent: attack the highest-value targets first.
+                        queue = agent.order_frontier(queue)
                         if added:
                             self._log(f"    [crawl] +{added} new URL(s) queued")
                     except Exception:

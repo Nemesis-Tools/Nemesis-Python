@@ -76,6 +76,18 @@ def discover_points(ctx, include_forms: bool = True) -> list[InjectionPoint]:
     return points
 
 
+def attack_url(point: InjectionPoint, value: str) -> str | None:
+    """Full GET URL carrying `value` in `point.param` — for re-executing the confirmed
+    attack inside the Selenium browser (visible on the live view) and screenshotting it.
+    Returns None for non-GET points (no navigable URL)."""
+    if point.method != "GET":
+        return None
+    params = dict(point.base_params)
+    params[point.param] = value
+    from urllib.parse import urlencode
+    return point.base_url + ("?" + urlencode(params) if params else "")
+
+
 def send(ctx, point: InjectionPoint, value: str, **kwargs):
     """Send a request with `point.param` set to `value`; returns a Response or None."""
     params = dict(point.base_params)

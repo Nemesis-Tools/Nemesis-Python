@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 from modules.base import BaseModule, ScanContext, register
 from core.result import Finding, Severity
 from core.http_utils import registrable
-from core.injection_points import discover_points, send
+from core.injection_points import discover_points, send, attack_url
 
 CANARY = "example.org"  # RFC 2606 reserved; safe, non-routable-to-you canary
 CANARY_PAYLOADS = [
@@ -61,6 +61,7 @@ class OpenRedirect(BaseModule):
                     evidence=f"Final URL: {resp.url}\nPayload: {payload}",
                     request=f"{pt.method} {pt.base_url}  ({pt.param}={payload})",
                     remediation="Allow-list redirect destinations; use relative paths or mapped identifiers.",
+                    extra={"attack": {"method": pt.method, "url": attack_url(pt, payload)}},
                 )
         return None
 

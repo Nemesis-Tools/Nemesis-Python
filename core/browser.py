@@ -5,6 +5,7 @@ matching browser driver, so no manual driver download is required.
 """
 from __future__ import annotations
 
+import threading
 import time
 
 from selenium import webdriver
@@ -39,11 +40,17 @@ class BrowserManager:
         self.headless = headless and not devtools
         self.page_load_timeout = page_load_timeout
         self.user_agent = user_agent
-        # Called with PNG bytes after each navigation (used for the live view).
+        # Called with PNG bytes for the live view.
         self.frame_callback = frame_callback
-        self.frame_min_interval = 0.35  # throttle screenshots to keep scans fast
+        self.frame_min_interval = 0.35
         self._last_frame_ts = 0.0
         self.driver: webdriver.Chrome | None = None
+        # Continuous streaming keeps the live view SMOOTH (frames even between
+        # navigations). All driver access is serialized on this lock.
+        self._lock = threading.Lock()
+        self._stream_run = False
+        self._stream_thread: threading.Thread | None = None
+        self.stream_interval = 0.2      # ~5 fps
 
     def capture_frame(self, force: bool = False) -> None:
         if not self.frame_callback or self.driver is None:
@@ -53,9 +60,47 @@ class BrowserManager:
             return
         self._last_frame_ts = now
         try:
-            self.frame_callback(self.driver.get_screenshot_as_png())
+            with self._lock:
+                png = self.driver.get_screenshot_as_png() if self.driver else None
+            if png:
+                self.frame_callback(png)
         except Exception:
             pass
+
+    def start_stream(self, interval: float | None = None) -> None:
+        """Begin continuous screenshot streaming to the live view (smooth playback)."""
+        if not self.frame_callback or self.driver is None:
+            return
+        if interval:
+            self.stream_interval = interval
+        if self._stream_thread and self._stream_thread.is_alive():
+            return
+        self._stream_run = True
+        self._stream_thread = threading.Thread(target=self._stream_loop, daemon=True)
+        self._stream_thread.start()
+
+    def stop_stream(self) -> None:
+        self._stream_run = False
+        t = self._stream_thread
+        if t and t.is_alive():
+            t.join(timeout=1.0)
+        self._stream_thread = None
+
+    def _stream_loop(self) -> None:
+        while self._stream_run and self.driver is not None:
+            png = None
+            try:
+                with self._lock:
+                    if self.driver is not None:
+                        png = self.driver.get_screenshot_as_png()
+            except Exception:
+                png = None
+            if png and self.frame_callback:
+                try:
+                    self.frame_callback(png)
+                except Exception:
+                    pass
+            time.sleep(self.stream_interval)
 
     def start(self) -> webdriver.Chrome:
         opts = ChromeOptions()
@@ -125,8 +170,10 @@ class BrowserManager:
         """Navigate; returns False on load failure instead of raising."""
         assert self.driver is not None, "BrowserManager.start() not called"
         try:
-            self.driver.get(url)
-            self.capture_frame()
+            with self._lock:
+                self.driver.get(url)
+            if not (self._stream_thread and self._stream_thread.is_alive()):
+                self.capture_frame()          # single frame when not streaming
             return True
         except WebDriverException:
             return False
@@ -143,6 +190,7 @@ class BrowserManager:
             return None
 
     def quit(self) -> None:
+        self.stop_stream()
         if self.driver is not None:
             try:
                 self.driver.quit()

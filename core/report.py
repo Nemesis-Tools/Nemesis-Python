@@ -190,6 +190,8 @@ def finding_to_report_md(target: str, finding: Finding, index: int | None = None
     _cs = (finding.extra or {}).get("confidence_score")
     L.append(f"| Detection Confidence | {finding.confidence}"
              + (f" (verification score {_cs}/100)" if _cs is not None else "") + " |")
+    if (finding.extra or {}).get("policy_downgraded"):
+        L.append("| Program Policy | 저위험 유형 → Low로 하향 (체인 침해는 chain 항목으로 High 유지) |")
     L.append("")
 
     L.append("## Executive Summary")
@@ -246,18 +248,30 @@ def finding_to_report_md(target: str, finding: Finding, index: int | None = None
         L.append(f"![poc](data:image/png;base64,{ex['screenshot_b64']})")
         L.append("")
 
+    _rreq = ex.get("raw_request")
+    _rresp = ex.get("raw_response")
+    _proof = ex.get("proof")
+    if _proof:
+        L.append("## Extracted Proof (active exploit)")
+        L.append("")
+        L.append("```json")
+        L.append(json.dumps(_proof, indent=2, ensure_ascii=False))
+        L.append("```")
+        L.append("")
+
     L.append("## HTTP Request")
+    L.append("*(actual request sent)*" if _rreq else "")
     L.append("")
     L.append("```http")
-    L.append(_raw_request(finding))
+    L.append(_rreq if _rreq else _raw_request(finding))
     L.append("```")
     L.append("")
 
     L.append("## HTTP Response")
-    L.append("*(excerpt — sensitive data masked)*")
+    L.append("*(actual response captured)*" if _rresp else "*(excerpt — sensitive data masked)*")
     L.append("")
     L.append("```")
-    L.append(finding.evidence or "<see scan evidence>")
+    L.append(_rresp if _rresp else (finding.evidence or "<see scan evidence>"))
     L.append("```")
     L.append("")
 

@@ -11,7 +11,7 @@ import re
 
 from modules.base import BaseModule, ScanContext, register
 from core.result import Finding, Severity
-from core.injection_points import discover_points, send
+from core.injection_points import discover_points, send, attack_url
 
 
 def _marker(name: str) -> str:
@@ -61,6 +61,7 @@ class CommandInjection(BaseModule):
                     evidence=f"Marker {marker!r} echoed by payload: {payload!r}",
                     request=f"{pt.method} {pt.base_url}  ({pt.param}=<payload>)",
                     remediation="Never pass user input to a shell; use argument arrays / safe APIs; strict allow-lists.",
+                    extra={"attack": {"method": pt.method, "url": attack_url(pt, base_val + payload)}},
                 )
         return None
 

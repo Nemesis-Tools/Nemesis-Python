@@ -263,6 +263,10 @@
         <label style="color:var(--text)"><input type="checkbox" id="o_tls" checked> TLS 인증서 검증</label>
         <label style="color:var(--text)"><input type="checkbox" id="o_fpfilter" checked> 검증 모델(오탐 필터 · 정탐 재보정)</label>
         <label style="color:var(--text)"><input type="checkbox" id="o_strict" checked> 엄격 검수(2차 교차검증 · 오탐 최소화)</label>
+        <label style="color:var(--text)"><input type="checkbox" id="o_policy" checked> 프로그램 정책(저위험 유형 자동 Low · 체인 침해는 제외)</label>
+        <label style="color:var(--text)"><input type="checkbox" id="o_sqlitime" checked> 시간 기반 블라인드 SQLi 탐지(느릴 수 있음 · 실제 증빙 수집)</label>
+        <label style="color:var(--text)"><input type="checkbox" id="o_browserev" checked> 확정 공격을 Selenium 화면에서 재실행 · 스크린샷 증거 수집</label>
+        <label>샌드박스 도메인(쉼표 구분, 이 도메인 취약점은 Low)</label><input type="text" id="o_sandbox" placeholder="naver.net, example-sandbox.com">
         <div class="fld"><div><label>요청 간격(초)</label><input type="text" id="o_delay" value="0.5"></div>
         <div><label>페이지 타임아웃(초)</label><input type="text" id="o_timeout" value="20"></div></div>
         <div class="fld"><div><label>최소 신뢰 점수(0–100, 낮을수록 더 많이 표시)</label><input type="text" id="o_minscore" value="38"></div></div>
@@ -331,6 +335,80 @@ let rec=null, recChunks=[], recCanvas=null, recCtx=null, recURL=null;
 let reports=[], recordings=[];   // {ts, url}
 let loginCreds={login_url:'',username:'',password:''}, loginState=null;
 let credState=null, credBuf={}, credPrompting=false;
+let keyState=null, testActive=false, testPoller=null, testSeen=false;
+function beginKeyPrompt(){
+  keyState='key'; ensureTerminal(); setPwMode(true);
+  termLog('🔑 Gemini API 토큰(AIza…)을 붙여넣고 Enter 하세요. (이 브라우저에만 저장 · env GEMINI_API_KEY 를 쓰면 그냥 Enter)');
+  setTimeout(()=>$('#terminput').focus(),0);
+}
+async function runTest(){
+  const target=$('#url').value.trim();
+  if(!target){ termLog('✗ 대상 URL을 상단에 먼저 입력하세요.'); toast('대상 URL을 입력하세요','error'); return; }
+  if(testActive){ termLog('이미 Gemini 분석이 진행 중입니다.'); return; }
+  const key=localStorage.getItem('nemesisGeminiKey')||'';
+  termLog('🧠 Gemini AI 취약점 분석 에이전트 시작 — 리컨·검수·권장공격 (딥러닝/ML 모델과 병행)…');
+  let j;
+  try{
+    const r=await fetch('/api/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target,api_key:key})});
+    j=await r.json();
+    if(!r.ok){ if(j.need_key){ termLog('🔑 Gemini API 토큰이 필요합니다.'); beginKeyPrompt(); return; }
+      throw new Error(j.error||'시작 실패'); }
+  }catch(e){ toast(e.message||'Gemini 분석 실패','error'); termLog('✗ '+(e.message||'실패')); return; }
+  toast('Gemini 분석을 시작합니다','info');
+  testActive=true; testSeen=false;
+  try{ const s=await (await fetch('/api/state?logs=0&finds=0')).json(); logCur=s.log_total; }catch(e){}
+  clearInterval(testPoller); testPoller=setInterval(pollTest,700); pollTest();
+}
+async function pollTest(){
+  try{
+    const r=await fetch(`/api/state?logs=${logCur}&finds=0`); const s=await r.json();
+    if(s.logs&&s.logs.length){ $('#log').textContent+=s.logs.join('\n')+'\n'; logCur=s.log_total; $('#log').scrollTop=$('#log').scrollHeight; }
+    if(s.llm_running) testSeen=true;
+    if(testSeen && !s.llm_running){
+      clearInterval(testPoller); testActive=false;
+      if(s.llm_result){ addLlmReport(s.llm_result); toast('Gemini 분석 완료 · 보고서 저장됨','success',3400); }
+      else toast('Gemini 분석 종료','info');
+    }
+  }catch(e){}
+}
+function addLlmReport(md){
+  const url=URL.createObjectURL(new Blob([md],{type:'text/markdown'}));
+  reports.unshift({ts:nowStamp()+' · Gemini', url}); $('#btnReport').disabled=false;
+  if($('#files').classList.contains('open') && $('#files').dataset.kind==='report') renderFiles('report');
+}
+// ---- SAST (소스코드 취약점 분석) ----
+let sastActive=false, sastPoller=null, sastSeen=false;
+async function runSast(path){
+  if(sastActive){ termLog('이미 SAST 분석이 진행 중입니다.'); return; }
+  termLog('🔬 SAST 소스코드 취약점 분석 시작 — CWE 휴리스틱'+' + CodeBERT(설치 시)…');
+  let j;
+  try{
+    const r=await fetch('/api/sast',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})});
+    j=await r.json();
+    if(!r.ok) throw new Error(j.error||'시작 실패');
+  }catch(e){ toast(e.message||'SAST 실패','error'); termLog('✗ '+(e.message||'실패')); return; }
+  toast('SAST 분석을 시작합니다','info');
+  sastActive=true; sastSeen=false;
+  try{ const s=await (await fetch('/api/state?logs=0&finds=0')).json(); logCur=s.log_total; }catch(e){}
+  clearInterval(sastPoller); sastPoller=setInterval(pollSast,600); pollSast();
+}
+async function pollSast(){
+  try{
+    const r=await fetch(`/api/state?logs=${logCur}&finds=0`); const s=await r.json();
+    if(s.logs&&s.logs.length){ $('#log').textContent+=s.logs.join('\n')+'\n'; logCur=s.log_total; $('#log').scrollTop=$('#log').scrollHeight; }
+    if(s.sast_running) sastSeen=true;
+    if(sastSeen && !s.sast_running){
+      clearInterval(sastPoller); sastActive=false;
+      if(s.sast_result){ addSastReport(s.sast_result); toast('SAST 분석 완료 · 보고서 저장됨','success',3400); }
+      else toast('SAST 분석 종료','info');
+    }
+  }catch(e){}
+}
+function addSastReport(md){
+  const url=URL.createObjectURL(new Blob([md],{type:'text/markdown'}));
+  reports.unshift({ts:nowStamp()+' · SAST', url}); $('#btnReport').disabled=false;
+  if($('#files').classList.contains('open') && $('#files').dataset.kind==='report') renderFiles('report');
+}
 let allModules=[], attackList=[];
 function ensureTerminal(){ const t=[...$$('#bottom .tab')].find(x=>x.dataset.t==='log'); if(t) t.click(); }
 function beginCredPrompt(){
@@ -338,9 +416,11 @@ function beginCredPrompt(){
   termLog('\n🔐 로그인 페이지가 감지되었습니다. 로그인 정보를 입력하세요.');
   termLog('아이디/이메일:'); setTimeout(()=>$('#terminput').focus(),0);
 }
-const SLASH=[['/help','명령어 목록'],['/start','스캔 시작 — 선택된 기법으로 실행 (/start [url])'],
+const SLASH=[['/help','명령어 목록'],['/start','🤖 AI 공격 에이전트 시작 — 크롤·분석(ML)·실제 공격 (/start [url])'],
+  ['/test','🧠 Gemini AI 취약점 분석 에이전트 — 리컨·검수·권장공격 (딥러닝/ML 모델과 병행, /test [url])'],
+  ['/sast','🔬 소스코드 취약점 분석(SAST) — CWE 휴리스틱 + CodeBERT (/sast <파일/폴더 경로>)'],
   ['/attack','공격 기법 목록 (번호 입력 시 단독 실행) · /attack <검색어> 로 필터'],
-  ['/login','자동 로그인 미리 설정'],
+  ['/login','자동 로그인 미리 설정'],['/geminikey','Gemini API 토큰 저장/삭제'],
   ['/stop','스캔 중지'],['/status','대상/로그인/선택 상태'],['/clearlogin','로그인 정보 삭제'],['/clear','터미널 지우기']];
 function termLog(s){ const el=$('#log'); el.textContent+=s+'\n'; el.scrollTop=el.scrollHeight; }
 function setPwMode(on){ const el=$('#terminput'); el.type=on?'password':'text';
@@ -365,6 +445,13 @@ function runAttackByIndex(n){
   launchScan([m.id], m.name+' 실행');
 }
 function handleTerm(val){
+  if(keyState){
+    termLog('› ••••••••');
+    if(val.trim()){ localStorage.setItem('nemesisGeminiKey', val.trim());
+      termLog('✔ Gemini 토큰 저장됨 (이 브라우저에만 보관). 이제 /test 를 실행하세요.'); toast('토큰 저장됨','success'); }
+    else termLog('토큰 미입력 — 취소됨.');
+    keyState=null; setPwMode(false); return;
+  }
   if(credState){
     termLog('› '+(credState==='pass'?'••••••':val));
     if(credState==='user'){ credBuf={username:val.trim()}; termLog('비밀번호:'); credState='pass'; setPwMode(true); }
@@ -394,7 +481,16 @@ function handleTerm(val){
   else if(cmd==='status') termLog('대상: '+($('#url').value||'(없음)')+'\n로그인: '+(loginCreds.username?('user='+loginCreds.username+(loginCreds.login_url?', url='+loginCreds.login_url:' (대상 URL 폼)')):'(미설정)')+'\n선택 기법: '+selectedModules().length+'개');
   else if(cmd==='start'){ if(parts[1]) $('#url').value=parts[1];
     if(!$('#url').value.trim()){ termLog('✗ 대상 URL을 상단에 먼저 입력하세요.'); toast('대상 URL을 입력하세요','error'); return; }
-    termLog('▶ 스캔 시작 — 선택된 기법 '+selectedModules().length+'개로 실행합니다.'); startScan(); }
+    termLog('🤖 AI 공격 에이전트 시작 — 사이트 크롤·메뉴 이동 → 취약점 분석(ML) → 실제 공격·체인. (기법 '+selectedModules().length+'개)');
+    startScan(true); }
+  else if(cmd==='test'){ if(parts[1]) $('#url').value=parts[1]; runTest(); }
+  else if(cmd==='sast'){ const p=parts.slice(1).join(' ').trim();
+    if(!p){ termLog('사용법: /sast <소스 파일 또는 폴더 경로>   (예: /sast C:\\proj\\src)'); return; }
+    runSast(p); }
+  else if(cmd==='geminikey'){
+    const sub=(parts[1]||'').toLowerCase();
+    if(sub==='clear'||sub==='delete'){ localStorage.removeItem('nemesisGeminiKey'); termLog('Gemini 토큰 삭제됨.'); toast('토큰 삭제','info'); }
+    else{ termLog(localStorage.getItem('nemesisGeminiKey')?'Gemini 토큰이 저장되어 있습니다. (지우려면 /geminikey clear)':'Gemini 토큰 미저장.'); beginKeyPrompt(); } }
   else if(cmd==='stop') stopScan();
   else if(cmd==='clear') $('#log').textContent='';
   else termLog('알 수 없는 명령: '+parts[0]+'   ( / 로 명령어 보기)');
@@ -475,6 +571,7 @@ function updateCount(){$('#selcount').textContent=selectedModules().length+'개'
 function gatherOptions(){return{
   headless:$('#o_headless').checked, devtools:$('#o_devtools').checked, verify_tls:$('#o_tls').checked,
   fp_filter:$('#o_fpfilter').checked, min_score:$('#o_minscore').value, review_strict:$('#o_strict').checked,
+  program_policy:$('#o_policy').checked, sandbox_domains:$('#o_sandbox').value, sqli_time:$('#o_sqlitime').checked, browser_evidence:$('#o_browserev').checked,
   delay:$('#o_delay').value, page_timeout:$('#o_timeout').value,
   crawl:$('#o_crawl').checked, max_depth:$('#o_depth').value, max_pages:$('#o_pages').value,
   user_agent:$('#o_ua').value, headers:$('#o_headers').value, cookies:$('#o_cookies').value,
@@ -500,7 +597,7 @@ async function openInteractive(){
   $('#live').classList.add('interactive'); setDot('live');
   showAddr(true); setAddr(j.url||url);
   termLog('▶ 뷰어 열림 — 화면을 클릭하고 키보드로 입력할 수 있습니다. 스캔은 /scan · /auto 또는 공격 번호로 실행하세요.');
-  clearInterval(framer); framer=setInterval(pollFrame,300); pollFrame();
+  clearInterval(framer); framer=setInterval(pollFrame,200); pollFrame();
   clearInterval(ibStatePoll); ibStatePoll=setInterval(pollBrowserState,900);
   setTimeout(()=>$('#liveimg').focus(),0);
 }
@@ -553,9 +650,14 @@ async function ibNavigate(u){
 async function ibAction(a){ if(!interactive)return; try{await fetch('/api/browser/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:a})});}catch(e){} setTimeout(pollFrame,200); }
 
 // ---- scan control ----
-async function launchScan(ids, note, guided){
+async function launchScan(ids, note, guided, agent){
   await closeInteractive();
   const opts=gatherOptions(); if(guided) opts.crawl=true;
+  if(agent){                                   // AI agent: crawl the site & walk menus
+    opts.crawl=true; opts.agent=true;
+    if(!(+opts.max_pages>=12)) opts.max_pages=20;
+    if(!(+opts.max_depth>=2)) opts.max_depth=3;
+  }
   const target=$('#url').value.trim();
   const body={target, scope_ok:true, modules:ids, options:opts, guided:!!guided};
   const r=await fetch('/api/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -571,7 +673,7 @@ async function launchScan(ids, note, guided){
   setRunning(true); startPolling();
   return true;
 }
-async function startScan(){ return launchScan(selectedModules()); }
+async function startScan(agent){ return launchScan(selectedModules(), agent?'🤖 AI 공격 에이전트 시작':undefined, false, !!agent); }
 async function stopScan(){ stopped=true; setDot('stop'); await fetch('/api/stop',{method:'POST'}); }
 function setRunning(on){
   $('#btnStart').disabled=on;$('#btnStop').disabled=!on;$('#url').disabled=on;
@@ -580,7 +682,7 @@ function setRunning(on){
 // ---- polling ----
 function startPolling(){
   clearInterval(poller);clearInterval(framer);
-  poller=setInterval(pollState,700); framer=setInterval(pollFrame,600); pollState();pollFrame();
+  poller=setInterval(pollState,700); framer=setInterval(pollFrame,150); pollState();pollFrame();
 }
 // While the frameless window is being dragged, pywebview moves it on the main
 // thread; our live-view timers must yield or the drag stutters/freezes.
@@ -658,7 +760,7 @@ function addFinding(f){
   findingsBuf.push(f);
   const tr=document.createElement('tr'); tr.className='fnd';
   tr.innerHTML=`<td><span class="sev" style="background:${SEV[f.severity]}">${f.severity}</span></td>
-    <td>${esc(f.title)}</td><td class="muted">${esc(f.confidence)}${(f.extra&&f.extra.confidence_score!=null)?` · ${f.extra.confidence_score}`:''}</td>
+    <td>${esc(f.title)}${(f.extra&&f.extra.policy_downgraded)?' <span class="muted" title="프로그램 정책상 저위험 → Low (체인 침해는 제외)">🛡정책</span>':''}</td><td class="muted">${esc(f.confidence)}${(f.extra&&f.extra.confidence_score!=null)?` · ${f.extra.confidence_score}`:''}</td>
     <td class="muted" style="max-width:280px;overflow:hidden;text-overflow:ellipsis">${esc(f.url)}</td>
     <td class="muted">${esc(f.module_id)}</td>`;
   tr.addEventListener('click',()=>showReport(f.index));
@@ -709,6 +811,10 @@ function buildEvidence(f){
     '- 대상 URL: '+(f.url||''), '- 탐지 모듈: '+(f.module_id||''),
     (f.request?'- 요청: '+f.request:''), '', '## 증거 내용', (f.evidence||'(없음)')];
   if(ex.sensitive_actions&&ex.sensitive_actions.length) L.push('', '## 민감 기능(추정)', ex.sensitive_actions.join(', '));
+  if(ex.proof) L.push('', '## 추출 정보 (Proof)', '```json', JSON.stringify(ex.proof,null,2), '```');
+  if(ex.raw_request) L.push('', '## 실제 공격 요청 (Raw HTTP Request)', '```http', ex.raw_request, '```');
+  if(ex.raw_response) L.push('', '## 응답 증빙 (Raw HTTP Response)', '```http', ex.raw_response, '```');
+  if(ex.policy_downgraded) L.push('', '## 위험도 분류', '프로그램 정책상 저위험 유형으로 분류되어 위험도를 Low로 하향했습니다. (단, 이 취약점을 이용해 다른 곳을 실제로 침해한 경우는 별도 chain 항목으로 High 유지)');
   if(f.remediation) L.push('', '## 조치 방안', f.remediation);
   return L.filter(x=>x!==null&&x!==undefined).join('\n')+'\n';
 }
@@ -742,7 +848,7 @@ async function downloadFullReport(){
 }
 
 // ---- settings persistence + open/close ----
-const OPT_IDS=['o_headless','o_devtools','o_tls','o_fpfilter','o_strict','o_minscore','o_delay','o_timeout','o_crawl','o_depth','o_pages','o_ua','o_headers','o_cookies','o_canary','o_poll'];
+const OPT_IDS=['o_headless','o_devtools','o_tls','o_fpfilter','o_strict','o_policy','o_sandbox','o_sqlitime','o_browserev','o_minscore','o_delay','o_timeout','o_crawl','o_depth','o_pages','o_ua','o_headers','o_cookies','o_canary','o_poll'];
 let _optSnap={};
 function getOpts(){const o={};OPT_IDS.forEach(id=>{const el=$('#'+id);if(el)o[id]=el.type==='checkbox'?el.checked:el.value;});return o;}
 function setOpts(o){OPT_IDS.forEach(id=>{const el=$('#'+id);if(!el||!(id in o))return;if(el.type==='checkbox')el.checked=o[id];else el.value=o[id];});}
