@@ -1,0 +1,12 @@
+# GUI
+PyQt5>=5.15.9
+
+# Browser automation
+selenium>=4.16.0        # Selenium Manager auto-downloads the driver (>=4.6)
+
+# HTTP / parsing
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+
+# Web UI (HTML front-end)
+flask>=3.0.0

@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+build/
+dist/
+*.html
+*.json
+!requirements*.json
+!webapp/static/index.html
+.DS_Store
