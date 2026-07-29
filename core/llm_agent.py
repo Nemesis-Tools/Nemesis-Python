@@ -44,7 +44,113 @@ except Exception:  # pragma: no cover - SDK optional until /test is used
     genai = None
     genai_types = None
 
+try:
+    from openai import OpenAI          # OpenAI-compatible providers (Groq/Mistral/…)
+except Exception:  # pragma: no cover
+    OpenAI = None
+
 MODEL = "gemini-2.5-flash"
+
+# ---- Multi-provider registry (free-tier LLMs) --------------------------------
+# Every provider except Gemini speaks the OpenAI-compatible chat-completions API,
+# so one client (base_url + key) covers all of them. Model catalogs drift — use
+# /model to switch and the error hints when a model 404s / is quota-zero.
+PROVIDERS = {
+    "gemini": {
+        "label": "Google Gemini", "kind": "gemini",
+        "models": ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-pro"],
+        "default": "gemini-2.5-flash",
+        "key_env": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+        "keys_url": "https://aistudio.google.com/app/apikey",
+        "free": "무료 티어(모델별 쿼터 상이 — flash 계열 권장; pro/lite는 무료 쿼터 0일 수 있음)",
+    },
+    "groq": {
+        "label": "Groq", "kind": "openai", "base_url": "https://api.groq.com/openai/v1",
+        "models": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant",
+                   "openai/gpt-oss-120b", "qwen/qwen3-32b"],
+        "default": "llama-3.3-70b-versatile",
+        "key_env": ["GROQ_API_KEY"], "keys_url": "https://console.groq.com/keys",
+        "free": "무료·신용카드 불필요, 매우 빠름(추천)",
+    },
+    "cerebras": {
+        "label": "Cerebras", "kind": "openai", "base_url": "https://api.cerebras.ai/v1",
+        "models": ["gpt-oss-120b", "llama-3.3-70b", "qwen-3-32b"],
+        "default": "gpt-oss-120b",
+        "key_env": ["CEREBRAS_API_KEY"], "keys_url": "https://cloud.cerebras.ai/",
+        "free": "무료 ~1M 토큰/일 (카탈로그 변동 잦음)",
+    },
+    "mistral": {
+        "label": "Mistral", "kind": "openai", "base_url": "https://api.mistral.ai/v1",
+        "models": ["mistral-small-latest", "magistral-small-latest",
+                   "open-mistral-nemo", "codestral-latest"],
+        "default": "mistral-small-latest",
+        "key_env": ["MISTRAL_API_KEY"], "keys_url": "https://console.mistral.ai/api-keys",
+        "free": "무료 Experiment 티어(데이터 학습 동의 필요, 월 대량)",
+    },
+    "openrouter": {
+        "label": "OpenRouter", "kind": "openai", "base_url": "https://openrouter.ai/api/v1",
+        "models": ["deepseek/deepseek-r1:free", "meta-llama/llama-3.3-70b-instruct:free",
+                   "qwen/qwen3-235b-a22b:free", "google/gemma-3-27b-it:free"],
+        "default": "deepseek/deepseek-r1:free",
+        "key_env": ["OPENROUTER_API_KEY"], "keys_url": "https://openrouter.ai/keys",
+        "free": "무료 모델 다수(:free 접미사, 여러 모델 한 키로)",
+    },
+    "openai": {
+        "label": "OpenAI (Codex/GPT)", "kind": "openai", "base_url": "https://api.openai.com/v1",
+        "models": ["gpt-4o-mini", "gpt-4o", "o4-mini"],
+        "default": "gpt-4o-mini",
+        "key_env": ["OPENAI_API_KEY"], "keys_url": "https://platform.openai.com/api-keys",
+        "free": "신규 계정 무료 크레딧(소진 후 유료)",
+    },
+}
+PROVIDER_ORDER = ["gemini", "groq", "cerebras", "mistral", "openrouter", "openai"]
+
+# Backwards-compat: the old /model command listed Gemini models.
+GEMINI_MODELS = PROVIDERS["gemini"]["models"]
+
+
+def providers_public() -> list[dict]:
+    """Provider metadata for the UI picker (no secrets)."""
+    return [{"id": p, "label": PROVIDERS[p]["label"], "kind": PROVIDERS[p]["kind"],
+             "models": PROVIDERS[p]["models"], "default": PROVIDERS[p]["default"],
+             "keys_url": PROVIDERS[p]["keys_url"], "free": PROVIDERS[p]["free"]}
+            for p in PROVIDER_ORDER]
+
+
+def _env_key(provider: str) -> str | None:
+    for e in PROVIDERS.get(provider, {}).get("key_env", []):
+        if os.environ.get(e):
+            return os.environ[e]
+    return None
+
+
+def _dast_eval():
+    """Held-out metrics stored in the trained DAST verifier (provenance)."""
+    try:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "models", "vuln_model.json"), encoding="utf-8") as fh:
+            return json.load(fh).get("eval")
+    except Exception:
+        return None
+
+
+def model_info() -> dict:
+    """Status of the locally-built models that /test composes with Gemini."""
+    info = {"dast_verifier": {"present": False}, "sast": {"heuristic": True},
+            "linevul": {"available": False}}
+    try:
+        from core import ml_model
+        info["dast_verifier"] = {"present": ml_model.available(), "eval": _dast_eval()}
+    except Exception:
+        pass
+    try:
+        from core.sast import model as sm
+        info["sast"] = {"heuristic": True,
+                        "codebert": bool(sm.available() and sm.model_present())}
+        info["linevul"] = {"available": bool(sm.available() and sm.model_present())}
+    except Exception:
+        pass
+    return info
 
 # Human-readable JSON contract described to Gemini (response_mime_type=json).
 _SCHEMA_HINT = """{
@@ -78,16 +184,18 @@ _SYSTEM = (
 )
 
 
-def available() -> bool:
-    """True if the Gemini agent can run (SDK importable)."""
-    return genai is not None
+def available(provider: str = "gemini") -> bool:
+    """True if the provider's SDK is importable."""
+    kind = PROVIDERS.get(provider, {}).get("kind", "gemini")
+    return (genai is not None) if kind == "gemini" else (OpenAI is not None)
 
 
-def key_available(api_key: str | None = None) -> bool:
-    """True if an API key is resolvable (explicit arg or env)."""
-    return bool((api_key or "").strip()
-                or os.environ.get("GEMINI_API_KEY")
-                or os.environ.get("GOOGLE_API_KEY"))
+def key_available(provider: str = "gemini", api_key: str | None = None) -> bool:
+    """True if an API key for `provider` is resolvable (arg or env)."""
+    # Back-compat: key_available("AIza...") — a bare key string means gemini.
+    if provider not in PROVIDERS and provider:
+        api_key, provider = provider, "gemini"
+    return bool((api_key or "").strip() or _env_key(provider))
 
 
 # ---- recon -------------------------------------------------------------------
@@ -218,67 +326,236 @@ def _extract_json(text: str) -> dict | None:
     return None
 
 
-def analyze(target: str, findings, api_key: str | None = None,
-            model: str = MODEL, log=None) -> dict:
-    """Run the Gemini analysis. Returns {ok, analysis|error, usage}."""
+def _error_hint(msg: str, provider: str = "gemini") -> str:
+    """Map common LLM-API errors to an actionable Korean hint."""
+    m = (msg or "").lower()
+    kp = PROVIDERS.get(provider, {})
+    url = kp.get("keys_url", "")
+    if "permission_denied" in m or "denied access" in m or "403" in m:
+        if provider == "gemini":
+            return ("Google가 이 키의 프로젝트 접근을 거부했습니다. ① 개인 Gmail 계정으로 "
+                    "AI Studio에서 새 키 발급(회사 Workspace 계정은 막힐 수 있음)  ② 지역 제한 확인.")
+        return f"접근 거부. 키 권한/결제 상태를 확인하세요 ({url})."
+    if "api key not valid" in m or "api_key_invalid" in m or ("invalid" in m and "key" in m) \
+            or "401" in m or "authentication" in m:
+        return f"API 키가 유효하지 않습니다. /key 로 {provider} 키를 다시 입력하세요 ({url})."
+    if "quota" in m or "resource_exhausted" in m or "429" in m or "rate limit" in m:
+        return ("무료 쿼터 초과/요청 과다입니다. 잠시 후 재시도하거나 /model 로 무료 쿼터가 있는 "
+                "모델로 바꾸세요. (Gemini는 flash 계열이 무료, 또는 /test 에서 Groq 선택)")
+    if "not found" in m or "404" in m or "no longer available" in m:
+        d = kp.get("default", "")
+        return f"이 모델은 사용할 수 없습니다. /model 로 다른 모델을 선택하세요 (예: {d})."
+    return ""
+
+
+def _call_gemini(model, key, prompt):
+    """Gemini generate_content → (json_text, usage_dict)."""
+    client = genai.Client(api_key=key)
+    resp = client.models.generate_content(
+        model=model, contents=prompt,
+        config=genai_types.GenerateContentConfig(
+            system_instruction=_SYSTEM, response_mime_type="application/json",
+            temperature=0.2, max_output_tokens=8000))
+    text = getattr(resp, "text", None)
+    u = getattr(resp, "usage_metadata", None)
+    usage = {"input": getattr(u, "prompt_token_count", None),
+             "output": getattr(u, "candidates_token_count", None)} if u else {}
+    return text, usage
+
+
+def _call_openai(base_url, model, key, prompt):
+    """OpenAI-compatible chat completion → (json_text, usage_dict). Retries
+    without response_format for providers that don't support JSON mode."""
+    client = OpenAI(api_key=key, base_url=base_url)
+    msgs = [{"role": "system", "content": _SYSTEM}, {"role": "user", "content": prompt}]
+    kw = dict(model=model, messages=msgs, temperature=0.2, max_tokens=8000)
+    try:
+        resp = client.chat.completions.create(response_format={"type": "json_object"}, **kw)
+    except Exception:
+        resp = client.chat.completions.create(**kw)     # provider lacks JSON mode
+    text = resp.choices[0].message.content
+    u = getattr(resp, "usage", None)
+    usage = {"input": getattr(u, "prompt_tokens", None),
+             "output": getattr(u, "completion_tokens", None)} if u else {}
+    return text, usage
+
+
+def _ensemble(analysis, fp):
+    """Fuse each LLM verdict with the LOCAL ML/DL verifier's P(true-positive)."""
+    ml_by_idx = {f["index"]: f.get("ml_true_positive_prob") for f in fp}
+    for v in (analysis.get("findings") or []):
+        try:
+            idx = int(v.get("index"))
+        except Exception:
+            continue
+        ml = ml_by_idx.get(idx)
+        g = float(v.get("confidence", 0.5)) if v.get("is_real") else 1.0 - float(v.get("confidence", 0.5))
+        if isinstance(ml, (int, float)):
+            v["ml_prob"] = round(float(ml), 3)
+            v["ensemble"] = round(0.55 * g + 0.45 * float(ml), 3)
+            v["agreement"] = bool(v.get("is_real")) == (float(ml) >= 0.5)
+        else:
+            v["ml_prob"] = None
+            v["ensemble"] = round(g, 3)
+            v["agreement"] = None
+    return analysis
+
+
+def analyze(target, findings, provider="gemini", model=None, api_key=None,
+            log=None, rec=None, fp=None):
+    """Run one provider's analysis, fused with the local ML model. Returns
+    {ok, analysis|error, provider, model, models, usage}."""
     def _log(m):
         if log:
             log(m)
-    if genai is None:
-        return {"ok": False, "error": "google-genai SDK 미설치 (pip install google-genai)"}
-    if not key_available(api_key):
-        return {"ok": False, "error": "GEMINI_API_KEY 미설정", "need_key": True}
+    if provider not in PROVIDERS:
+        provider = "gemini"
+    prov = PROVIDERS[provider]
+    model = model or prov["default"]
+    if not available(provider):
+        pkg = "google-genai" if prov["kind"] == "gemini" else "openai"
+        return {"ok": False, "error": f"{pkg} SDK 미설치 (pip install {pkg})", "provider": provider}
+    if not key_available(provider, api_key):
+        return {"ok": False, "error": f"{prov['label']} API 키 미설정", "need_key": True,
+                "provider": provider}
 
-    _log("🧠 Gemini 에이전트: 대상 리컨 수집 중…")
-    rec = recon(target)
-    if rec.get("error"):
-        _log(f"    [!] 리컨 경고: {rec['error']}")
-    _log(f"    [*] 상태 {rec.get('status')}, 폼 {len(rec.get('forms', []))}개, "
-         f"링크 {len(rec.get('links', []))}개, 파라미터 {len(rec.get('params', []))}개")
-    fp = _findings_payload(findings)
-    _log(f"🧠 Gemini 에이전트: 스캐너 결과 {len(fp)}건 + 리컨 컨텍스트를 {model} 에게 전달…")
+    if rec is None:
+        _log(f"🧠 {prov['label']}: 대상 리컨 수집 중…")
+        rec = recon(target)
+        if rec.get("error"):
+            _log(f"    [!] 리컨 경고: {rec['error']}")
+        _log(f"    [*] 상태 {rec.get('status')}, 폼 {len(rec.get('forms', []))}개, "
+             f"링크 {len(rec.get('links', []))}개, 파라미터 {len(rec.get('params', []))}개")
+    if fp is None:
+        fp = _findings_payload(findings)
+    _log(f"🧠 {prov['label']}({model}): 스캐너 결과 {len(fp)}건 + 리컨 컨텍스트 전달…")
 
-    key = (api_key or "").strip() or os.environ.get("GEMINI_API_KEY") \
-        or os.environ.get("GOOGLE_API_KEY")
+    key = (api_key or "").strip() or _env_key(provider)
+    prompt = _build_prompt(rec, fp)
     try:
-        client = genai.Client(api_key=key)
-        resp = client.models.generate_content(
-            model=model,
-            contents=_build_prompt(rec, fp),
-            config=genai_types.GenerateContentConfig(
-                system_instruction=_SYSTEM,
-                response_mime_type="application/json",
-                temperature=0.2,
-                max_output_tokens=8000,
-            ),
-        )
+        if prov["kind"] == "gemini":
+            text, usage = _call_gemini(model, key, prompt)
+        else:
+            text, usage = _call_openai(prov["base_url"], model, key, prompt)
     except Exception as e:
-        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return {"ok": False, "error": f"{type(e).__name__}: {e}",
+                "hint": _error_hint(str(e), provider), "provider": provider, "model": model}
 
-    text = getattr(resp, "text", None)
     if not text:
-        # blocked / empty — surface the reason if any
-        reason = ""
-        try:
-            fb = getattr(resp, "prompt_feedback", None)
-            if fb and getattr(fb, "block_reason", None):
-                reason = str(fb.block_reason)
-        except Exception:
-            pass
-        return {"ok": False, "error": f"Gemini 응답 없음{(' ('+reason+')') if reason else ''}"}
-
+        return {"ok": False, "error": f"{prov['label']} 응답 없음(안전 차단 가능)",
+                "provider": provider, "model": model}
     analysis = _extract_json(text)
     if analysis is None:
-        return {"ok": False, "error": "Gemini 응답 파싱 실패", "raw": text[:800]}
+        return {"ok": False, "error": f"{prov['label']} 응답 파싱 실패",
+                "raw": text[:800], "provider": provider, "model": model}
 
-    usage = getattr(resp, "usage_metadata", None)
     return {
-        "ok": True,
-        "analysis": analysis,
+        "ok": True, "analysis": _ensemble(analysis, fp),
+        "provider": provider, "provider_label": prov["label"], "model": model,
+        "models": model_info(),
         "recon": {k: v for k, v in rec.items() if k != "html"},
-        "usage": {"input": getattr(usage, "prompt_token_count", None),
-                  "output": getattr(usage, "candidates_token_count", None)} if usage else {},
+        "usage": usage,
     }
+
+
+def analyze_multi(target, findings, providers, keys=None, models=None, log=None):
+    """Run several providers on the SAME recon/findings and combine (전체 사용).
+
+    `providers` is a list of provider ids (or ["all"]); `keys`/`models` are
+    dicts keyed by provider id. Only providers with a resolvable key run.
+    Returns {ok, results:[per-provider], recon, models}.
+    """
+    def _log(m):
+        if log:
+            log(m)
+    keys = keys or {}
+    models = models or {}
+    if not providers or providers == ["all"] or "all" in providers:
+        providers = list(PROVIDER_ORDER)
+    _log("🧠 리컨 수집 중(전체 제공자 공용)…")
+    rec = recon(target)
+    fp = _findings_payload(findings)
+    _log(f"    [*] 상태 {rec.get('status')}, 폼 {len(rec.get('forms', []))}개, "
+         f"링크 {len(rec.get('links', []))}개  ·  스캐너 결과 {len(fp)}건")
+    results = []
+    ran = 0
+    for pid in providers:
+        if pid not in PROVIDERS:
+            continue
+        k = keys.get(pid)
+        if not key_available(pid, k):
+            _log(f"    · {PROVIDERS[pid]['label']}: 키 없음 → 건너뜀")
+            continue
+        _log(f"── {PROVIDERS[pid]['label']} 분석 ──")
+        res = analyze(target, findings, provider=pid, model=models.get(pid),
+                      api_key=k, log=log, rec=rec, fp=fp)
+        results.append(res)
+        if res.get("ok"):
+            ran += 1
+        else:
+            _log(f"    [!] {res.get('error')}")
+            if res.get("hint"):
+                _log(f"      💡 {res['hint']}")
+    if not ran:
+        return {"ok": False, "error": "실행된 제공자가 없습니다 (키를 하나 이상 설정하세요).",
+                "results": results}
+    return {"ok": True, "results": results,
+            "recon": {k: v for k, v in rec.items() if k != "html"}, "models": model_info()}
+
+
+def _complete(provider, model, key, system, prompt, max_tokens=1000):
+    """Low-level single completion → text (provider-dispatched)."""
+    prov = PROVIDERS[provider]
+    if prov["kind"] == "gemini":
+        client = genai.Client(api_key=key)
+        resp = client.models.generate_content(
+            model=model, contents=prompt,
+            config=genai_types.GenerateContentConfig(
+                system_instruction=system, response_mime_type="application/json",
+                temperature=0.2, max_output_tokens=max_tokens))
+        return getattr(resp, "text", None)
+    client = OpenAI(api_key=key, base_url=prov["base_url"])
+    msgs = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+    kw = dict(model=model, messages=msgs, temperature=0.2, max_tokens=max_tokens)
+    try:
+        resp = client.chat.completions.create(response_format={"type": "json_object"}, **kw)
+    except Exception:
+        resp = client.chat.completions.create(**kw)
+    return resp.choices[0].message.content
+
+
+_GUIDE_SYS = (
+    "You are a pentest co-pilot for an AUTHORISED bug-bounty scan. Given ONE page's URL, "
+    "parameters, forms, and the list of scanner techniques about to run on it, output concise "
+    "JSON to focus the scan on that page: "
+    '{"focus_params":[...], "focus_techniques":[...], "payload_hints":[...], "note":"..."}. '
+    "payload_hints are short test strings for the techniques already in the scanner (e.g. SQLi/"
+    "XSS/SSTI/traversal) — defensive scanning guidance only. Be brief; JSON only."
+)
+
+
+def page_guidance(url, page, techniques, provider="gemini", api_key=None, model=None):
+    """One quick LLM call giving per-page attack-focus guidance during /start.
+
+    Returns {focus_params, focus_techniques, payload_hints, note} or {error:...}
+    or None (no key/SDK). Fail-soft: the scan continues regardless.
+    """
+    if provider not in PROVIDERS or not available(provider):
+        return None
+    key = (api_key or "").strip() or _env_key(provider)
+    if not key:
+        return None
+    model = model or PROVIDERS[provider]["default"]
+    prompt = ("PAGE: " + url +
+              "\nPARAMS: " + json.dumps((page or {}).get("params", [])) +
+              "\nFORMS: " + json.dumps((page or {}).get("forms", []))[:600] +
+              "\nTECHNIQUES: " + ", ".join(techniques[:40]) +
+              "\nGive focused JSON guidance now.")
+    try:
+        text = _complete(provider, model, key, _GUIDE_SYS, prompt, max_tokens=700)
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}", "hint": _error_hint(str(e), provider)}
+    return _extract_json(text or "") or {"error": "파싱 실패"}
 
 
 def learn_from_llm(findings, analysis: dict, models_dir: str,
@@ -312,7 +589,7 @@ def learn_from_llm(findings, analysis: dict, models_dir: str,
             continue
         rows.append({"features": feats, "label": 1 if v.get("is_real") else 0,
                      "module": getattr(findings[idx], "module_id", ""),
-                     "source": "gemini"})
+                     "source": "llm"})
     if not rows:
         return 0
     try:
@@ -323,7 +600,7 @@ def learn_from_llm(findings, analysis: dict, models_dir: str,
     except Exception as e:
         _log(f"    [!] 피드백 기록 실패: {e}")
         return 0
-    _log(f"📚 Gemini 판정 {len(rows)}건을 ML 학습 라벨로 저장 (models/feedback.jsonl) — 모델이 Gemini에게 학습.")
+    _log(f"📚 LLM 판정 {len(rows)}건을 ML 학습 라벨로 저장 (models/feedback.jsonl) — 로컬 모델이 LLM에게 학습.")
     return len(rows)
 
 
@@ -334,19 +611,35 @@ learn_from_claude = learn_from_llm
 def format_report(target: str, res: dict) -> str:
     """Render the analysis as Markdown (for the terminal + downloadable report)."""
     a = res.get("analysis") or {}
-    lines = [f"# Gemini AI 취약점 분석 — {target}", ""]
+    plabel = res.get("provider_label", "LLM")
+    lines = [f"# {plabel} + 로컬 ML/DL 앙상블 취약점 분석 — {target}", ""]
+    lines.append(f"**모델:** {res.get('model', MODEL)} ({plabel}) + 로컬 검수모델(앙상블)")
     lines.append(f"**종합 위험도:** {a.get('overall_risk', '-')}")
     u = res.get("usage") or {}
     if u:
         lines.append(f"**토큰:** in {u.get('input')}, out {u.get('output')}")
+    # Local model provenance (생성한 모델 구성).
+    mi = res.get("models") or {}
+    dv = (mi.get("dast_verifier") or {})
+    ev = (dv.get("eval") or {}) if isinstance(dv.get("eval"), dict) else {}
+    lines += ["", "## 구성 모델 (로컬)",
+              f"- **DAST 검수모델(MLP)**: {'로드됨' if dv.get('present') else '미로드'}"
+              + (f" · val F1={ev.get('f1')}, ROC-AUC={ev.get('roc_auc')}" if ev else ""),
+              f"- **SAST 소스코드**: 휴리스틱 CWE 룰 + CodeBERT {'사용' if (mi.get('sast') or {}).get('codebert') else '미사용'} (/sast)",
+              f"- **LineVul 라인예측**: {'사용' if (mi.get('linevul') or {}).get('available') else '미사용'}"]
     lines += ["", "## 사이트 요약", a.get("site_summary", "-"), "", "## 공격 표면"]
     for s in a.get("attack_surface", []) or ["-"]:
         lines.append(f"- {s}")
-    lines += ["", "## 발견 항목 검수 (Gemini)"]
+    lines += ["", f"## 발견 항목 검수 ({plabel} ⊕ 로컬 ML 앙상블)"]
     for v in a.get("findings", []):
         mark = "✅ 실제" if v.get("is_real") else "⚠️ 오탐 의심"
+        ml = v.get("ml_prob")
+        agr = v.get("agreement")
+        agr_s = "일치" if agr else ("불일치" if agr is False else "ML없음")
+        ml_s = f"ML {ml}" if ml is not None else "ML n/a"
         lines.append(f"- [{v.get('index')}] {mark} · {v.get('severity')} "
-                     f"(신뢰 {v.get('confidence')}) — {v.get('reasoning')}")
+                     f"(LLM신뢰 {v.get('confidence')} · {ml_s} · 앙상블 {v.get('ensemble')} · {agr_s}) "
+                     f"— {v.get('reasoning')}")
     if not a.get("findings"):
         lines.append("- (없음)")
     lines += ["", "## 권장 공격 (우선순위순)"]
@@ -358,4 +651,45 @@ def format_report(target: str, res: dict) -> str:
         lines.append("- (없음)")
     if a.get("notes"):
         lines += ["", "## 비고", a["notes"]]
+    return "\n".join(lines)
+
+
+def format_multi_report(target: str, multi: dict) -> str:
+    """Combine several providers' analyses into one report (전체 사용).
+
+    Adds a cross-provider consensus per finding (how many LLMs marked it real)
+    on top of each provider's own section."""
+    oks = [r for r in (multi.get("results") or []) if r.get("ok")]
+    lines = [f"# 멀티-LLM + 로컬 ML/DL 앙상블 취약점 분석 — {target}", "",
+             f"**실행 제공자:** {', '.join(r.get('provider_label', r.get('provider')) for r in oks) or '(없음)'}", ""]
+    # Cross-provider consensus per finding index.
+    consensus = {}
+    for r in oks:
+        for v in (r.get("analysis") or {}).get("findings", []):
+            try:
+                idx = int(v.get("index"))
+            except Exception:
+                continue
+            c = consensus.setdefault(idx, {"real": 0, "total": 0, "title": v.get("title", ""),
+                                           "ml": v.get("ml_prob")})
+            c["total"] += 1
+            if v.get("is_real"):
+                c["real"] += 1
+    if consensus:
+        lines += ["## 교차 합의 (제공자 간)"]
+        for idx in sorted(consensus):
+            c = consensus[idx]
+            ml_s = f" · ML {c['ml']}" if c.get("ml") is not None else ""
+            verdict = "✅ 실제(다수)" if c["real"] * 2 > c["total"] else (
+                "⚠️ 의견 분분" if c["real"] else "❎ 오탐(다수)")
+            lines.append(f"- [{idx}] {verdict} — {c['real']}/{c['total']} 제공자가 실제로 판정"
+                         f"{ml_s}  ·  {c['title']}")
+        lines.append("")
+    # Per-provider full sections.
+    for r in multi.get("results") or []:
+        if r.get("ok"):
+            lines += ["", "---", "", format_report(target, r)]
+        else:
+            lines += ["", f"## {PROVIDERS.get(r.get('provider'), {}).get('label', r.get('provider'))} — 실패",
+                      f"- {r.get('error')}" + (f"  💡 {r['hint']}" if r.get('hint') else "")]
     return "\n".join(lines)

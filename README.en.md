@@ -8,7 +8,8 @@
 </p>
 
 <p align="center">
-  A Selenium-based web vulnerability scanner · <b>HTTP/HTTPS</b> · <b>329 techniques</b> · <b>HackerOne-format reports (auto CWE/CVSS)</b>
+  A Selenium-based web vulnerability scanner · <b>HTTP/HTTPS</b> · <b>329 techniques</b> · <b>HackerOne-format reports (auto CWE/CVSS)</b><br>
+  <b>Local ML/DL review model</b> + <b>multi-LLM AI analysis</b> (Gemini·Groq·Cerebras·Mistral·OpenRouter·OpenAI) · <b>SAST source-code analysis</b>
 </p>
 
 ---
@@ -132,15 +133,50 @@ Type `/` in the bottom TERMINAL to open the command popover.
 
 | Command | Description |
 |---|---|
-| `/start [url]` | **Start the scan** with the selected techniques (prepare in the viewer, then run this) |
+| `/start [url]` | **AI attack agent** — crawl & walk the site → local ML/DL verification → real attacks + chaining. With a key, the LLM **assists each page's techniques in real time** + a final review |
+| `/test [url]` | **Multi-LLM analysis** — pick a provider (all / Gemini / Groq / OpenAI…) → recon, review, suggested attacks, **ensembled** with the local ML |
+| `/sast <path>` | **Source-code analysis (SAST)** — CWE heuristic rules + (optional) CodeBERT/LineVul |
+| `/model` | List the current provider's LLM models → change by number |
+| `/key [provider]` | Save/clear an LLM provider API key (`/key groq`, `/key groq clear`, `/key` to list) |
 | `/attack [query]` | List techniques with numbers → **enter a number to run that attack alone** |
 | `/login` | Interactive auto-login setup (URL → username → password) |
-| `/status` | Show the current scan status |
+| `/status` | Show target / provider / model / stored-key status |
 | `/stop` | Stop the running scan |
 | `/clearlogin` | Delete saved login credentials |
 | `/clear` | Clear the screen (logs) |
 
 Example: `/attack sqli` → enter `1` → runs that SQLi module against the target URL for real.
+
+**Terminal shortcuts** (like a real shell): `↑`/`↓` command history (persists across restarts) · `Tab`
+completion · `Ctrl+L` clear · `Ctrl+C` cancel · `Ctrl+U`/`Ctrl+K` kill to start/end · `Ctrl+W` delete
+word · `Ctrl+A`/`Ctrl+E` move to line start/end.
+
+## AI analysis — Multi-LLM + local ML/DL ensemble
+
+The local model (always on, zero external deps) and cloud LLMs (optional, free tiers) run **together** to
+raise true positives and cut false positives. This is a **co-pilot for authorized scanning**; it does not
+generate autonomous exploits.
+
+- **`/test` (multi-LLM)** — sends recon + local-ML findings (with rule score & TP-probability) to the LLM,
+  which re-judges exploitability/severity and proposes next attacks. **Pick multiple providers** or **use
+  all** for cross-provider consensus. LLM verdicts are saved to `feedback.jsonl` as training labels — the
+  local model learns from the LLM.
+- **Providers (free tier)** — Gemini (flash free) · **Groq** (free, no card, recommended) · Cerebras
+  (~1M tokens/day) · Mistral (Experiment free) · OpenRouter (`:free` models) · OpenAI. Mostly OpenAI-compatible.
+  Keys via `/key <provider>` (stored in the browser only) or env (`GEMINI_API_KEY`/`GROQ_API_KEY`…).
+- **`/start` LLM co-pilot** — with a key, the agent walks the pages and, as each page's techniques begin,
+  supplies **promising params / recommended techniques / payload hints** in real time (once per page, capped,
+  fail-soft), then runs a final LLM+ML ensemble review of all findings.
+
+## SAST — source-code analysis (`/sast`)
+
+A white-box complement to the black-box (DAST) scanner. `/sast <file/dir path>`.
+
+- **Heuristic CWE rule engine** (pure Python, always on) — line-level detection for CWE-78/89/79/94/502/22/
+  327/295/798/120/338 and more (bandit/semgrep-style).
+- **CodeBERT/GraphCodeBERT classifier** (optional, `pip install torch transformers`) — fine-tune with
+  `tools/train_sast.py` on Devign/Big-Vul/Juliet and drop it in `models/sast_codebert/` for auto-load;
+  **LineVul**-style line localisation.
 
 ## Nemesis ML Model
 

@@ -8,7 +8,8 @@
 </p>
 
 <p align="center">
-  基于 Selenium 的 Web 漏洞检测工具 · <b>HTTP/HTTPS</b> · <b>329 种</b>技术 · <b>HackerOne 格式报告（自动 CWE/CVSS）</b>
+  基于 Selenium 的 Web 漏洞检测工具 · <b>HTTP/HTTPS</b> · <b>329 种</b>技术 · <b>HackerOne 格式报告（自动 CWE/CVSS）</b><br>
+  <b>本地 ML/DL 复核模型</b> + <b>多 LLM AI 分析</b>（Gemini·Groq·Cerebras·Mistral·OpenRouter·OpenAI） · <b>SAST 源代码分析</b>
 </p>
 
 ---
@@ -117,15 +118,44 @@ powershell -ExecutionPolicy Bypass -File build_web_exe.ps1
 
 | 命令 | 说明 |
 |---|---|
-| `/start [url]` | **开始扫描** —— 使用已选技术执行（在查看器中准备好后用此命令运行） |
+| `/start [url]` | **AI 攻击代理** —— 爬取并遍历站点 → 本地 ML/DL 复核 → 实际攻击与链式利用。有密钥时，LLM **实时辅助每个页面的技术** + 结束后整体复核 |
+| `/test [url]` | **多 LLM 分析** —— 选择提供商（全部 / Gemini / Groq / OpenAI…）→ 侦察、复核、推荐攻击，并与本地 ML **集成** |
+| `/sast <路径>` | **源代码漏洞分析（SAST）** —— CWE 启发式规则 +（可选）CodeBERT/LineVul |
+| `/model` | 列出当前提供商的 LLM 模型 → 输入编号切换 |
+| `/key [提供商]` | 保存/删除 LLM 提供商 API 密钥（`/key groq`、`/key groq clear`、`/key` 查看列表） |
 | `/attack [关键字]` | 按编号列出攻击技术 → **输入编号即可单独执行该攻击** |
 | `/login` | 交互式自动登录设置（URL → 账号 → 密码） |
-| `/status` | 查看当前扫描状态 |
+| `/status` | 查看目标 / 提供商 / 模型 / 密钥状态 |
 | `/stop` | 停止进行中的扫描 |
 | `/clearlogin` | 删除已保存的登录信息 |
 | `/clear` | 清除画面（日志） |
 
 示例：`/attack sqli` → 输入 `1` → 对目标 URL 实际执行该 SQLi 模块。
+
+**终端快捷键**（与真实 shell 一致）：`↑`/`↓` 历史命令（重启后保留）· `Tab` 补全 · `Ctrl+L` 清屏 ·
+`Ctrl+C` 取消 · `Ctrl+U`/`Ctrl+K` 删除到行首/行尾 · `Ctrl+W` 删除单词 · `Ctrl+A`/`Ctrl+E` 移到行首/行尾。
+
+## AI 分析 —— 多 LLM + 本地 ML/DL 集成
+
+本地模型（始终运行、零外部依赖）与云端 LLM（可选、免费额度）**协同**运行，以提高真阳性、减少误报。
+这是**面向授权扫描的副驾驶辅助**，不生成自主漏洞利用。
+
+- **`/test`（多 LLM）** —— 将侦察 + 本地 ML 发现（含规则分数与真阳性概率）交给 LLM，重新判定可利用性/
+  严重度并建议后续攻击。可**选择多个提供商**或**全部使用**做跨提供商共识。LLM 判定会写入 `feedback.jsonl`
+  作为训练标签 —— 本地模型向 LLM 学习。
+- **提供商（免费额度）** —— Gemini（flash 免费）· **Groq**（免费、免信用卡，推荐）· Cerebras（约 100 万 tokens/天）·
+  Mistral（Experiment 免费）· OpenRouter（`:free` 模型）· OpenAI。大多为 OpenAI 兼容接口。
+  密钥通过 `/key <提供商>`（仅存于浏览器）或环境变量（`GEMINI_API_KEY`/`GROQ_API_KEY`…）。
+- **`/start` LLM 副驾驶** —— 有密钥时，代理遍历页面，在每个页面的技术开始时实时提供**可疑参数/推荐技术/
+  载荷提示**（每页一次、有上限、失败也继续），结束时对全部发现做 LLM+ML 集成复核。
+
+## SAST —— 源代码漏洞分析（`/sast`）
+
+对黑盒（DAST）扫描器的白盒补充。`/sast <文件/目录路径>`。
+
+- **启发式 CWE 规则引擎**（纯 Python，始终运行）—— 对 CWE-78/89/79/94/502/22/327/295/798/120/338 等做行级检测。
+- **CodeBERT/GraphCodeBERT 分类器**（可选，`pip install torch transformers`）—— 用 `tools/train_sast.py`
+  在 Devign/Big-Vul/Juliet 上微调后放入 `models/sast_codebert/` 即自动加载；**LineVul** 方式定位漏洞行。
 
 ## Nemesis ML Model
 

@@ -413,8 +413,32 @@ class Scanner:
                                    cookies=opt.get("cookies") or None, base_url=self.target)
             if self.on_frame:
                 browser.start_stream(0.15)     # smooth continuous live view (~7 fps) during the scan
+            # /start AI cycle: local ML/DL verifier (always) + optional LLM co-pilot
+            # that supports each page's techniques in real time as the agent walks
+            # the site. LLM support is fail-soft and bounded (free-tier friendly).
+            llm_on = bool(opt.get("agent") and opt.get("agent_llm"))
+            llm_provider = opt.get("llm_provider") or "gemini"
+            llm_keys = opt.get("llm_keys") or {}
+            llm_models = opt.get("llm_models") or {}
+            llm_key = llm_keys.get(llm_provider)
+            llm_agent = None
+            llm_pages = 0
+            LLM_MAX_PAGES = int(opt.get("agent_llm_max_pages", 6))
             if opt.get("agent"):
                 self._log("🤖 AI 공격 에이전트: 사이트 크롤·메뉴 이동 → 취약점 분석(ML 검증) → 실제 공격·체인 실행")
+            if llm_on:
+                try:
+                    from core import llm_agent as _llm
+                    llm_agent = _llm
+                    if not _llm.key_available(llm_provider, llm_key):
+                        self._log(f"    [*] LLM 서포트 비활성(키 없음: {llm_provider}) — 로컬 ML 모델만 적용")
+                        llm_on = False
+                    else:
+                        self._log(f"🧠 LLM 서포트 활성: {llm_provider} — 각 페이지의 공격 기법을 실시간 보조 "
+                                  f"(최대 {LLM_MAX_PAGES}페이지) + 종료 후 전체 검수")
+                except Exception as e:
+                    self._log(f"    [!] LLM 서포트 로드 실패: {e}")
+                    llm_on = False
             # Optional authenticated scanning (non-guided): log in up front.
             if not opt.get("guided"):
                 self._auto_login(browser, http, opt)
@@ -570,6 +594,36 @@ class Scanner:
                     except Exception:
                         pass
 
+                # LLM co-pilot: as this page's techniques begin, get focused guidance
+                # (promising params / techniques / payload hints) — bounded & fail-soft.
+                if llm_on and llm_agent and llm_pages < LLM_MAX_PAGES and not self._stop.is_set():
+                    try:
+                        pg = llm_agent.recon(url)
+                        g = llm_agent.page_guidance(
+                            url, pg, [_name(m) for m in page_mods],
+                            provider=llm_provider, api_key=llm_key,
+                            model=llm_models.get(llm_provider))
+                        llm_pages += 1
+                        if g and not g.get("error"):
+                            fp = ", ".join(g.get("focus_params") or []) or "-"
+                            ft = ", ".join(g.get("focus_techniques") or []) or "-"
+                            ph = "; ".join(g.get("payload_hints") or [])
+                            self._log(f"    🧠 LLM 서포트 · 유망 파라미터: {fp}")
+                            self._log(f"    🧠 LLM 서포트 · 권장 기법: {ft}")
+                            if ph:
+                                self._log(f"    🧠 LLM 서포트 · 페이로드 힌트: {ph[:200]}")
+                            if g.get("note"):
+                                self._log(f"    🧠 {g['note'][:200]}")
+                        elif g and g.get("error"):
+                            self._log(f"    [!] LLM 서포트 오류: {str(g['error'])[:100]} (스캔은 계속)")
+                            if g.get("hint"):
+                                self._log(f"      💡 {g['hint']}")
+                    except Exception as e:
+                        self._log(f"    [!] LLM 서포트 예외: {e}")
+                elif llm_on and llm_pages == LLM_MAX_PAGES:
+                    llm_pages += 1                       # log the cap once
+                    self._log(f"    [*] LLM 서포트 한도({LLM_MAX_PAGES}페이지) 도달 — 이후 페이지는 ML만 적용")
+
                 for mid in page_mods:
                     if self._stop.is_set():
                         break
@@ -606,6 +660,27 @@ class Scanner:
                 chained = chain.run_chains(ctx, self.findings, self.on_finding)
                 self.findings.extend(chained)
                 self._log(f"    -> {len(chained)} chained finding(s)")
+
+            # ---- Phase 4: LLM final review (ties ML + LLM together, learns) ----
+            if llm_on and llm_agent and self.findings and not self._stop.is_set():
+                self._log("\n########## 🧠 LLM 최종 검수 (전체 발견 · ML 앙상블) ##########")
+                try:
+                    res = llm_agent.analyze(
+                        self.target, self.findings, provider=llm_provider,
+                        model=llm_models.get(llm_provider), api_key=llm_key, log=self._log)
+                    if res.get("ok"):
+                        for line in llm_agent.format_report(self.target, res).splitlines():
+                            self._log(line)
+                        import os as _os
+                        _root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+                        llm_agent.learn_from_llm(self.findings, res["analysis"],
+                                                 _os.path.join(_root, "models"), log=self._log)
+                    else:
+                        self._log(f"[!] LLM 최종 검수 실패: {res.get('error')}")
+                        if res.get("hint"):
+                            self._log(f"    💡 {res['hint']}")
+                except Exception as e:
+                    self._log(f"[!] LLM 최종 검수 예외: {e}")
 
             if self._stop.is_set():
                 self._log("[!] Scan stopped by user.")

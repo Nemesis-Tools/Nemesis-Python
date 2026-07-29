@@ -143,7 +143,7 @@ class ScanSession:
         self._cred_event.set()
 
     # ---- Gemini AI agent (/test) ----
-    def start_llm_test(self, target: str, api_key: str, models_dir: str) -> bool:
+    def start_llm_test(self, target: str, cfg: dict, models_dir: str) -> bool:
         with self.lock:
             if self.running or self.llm_running:
                 return False
@@ -153,33 +153,49 @@ class ScanSession:
                 self.target = target
             findings = list(self.findings)
         t = threading.Thread(target=self._run_llm_test,
-                             args=(target, api_key, models_dir, findings), daemon=True)
+                             args=(target, cfg, models_dir, findings), daemon=True)
         t.start()
         return True
 
-    def _run_llm_test(self, target: str, api_key: str, models_dir: str, findings) -> None:
+    def _run_llm_test(self, target, cfg, models_dir, findings) -> None:
         from core import llm_agent
+        provider = (cfg.get("provider") or "gemini").strip()
+        keys = cfg.get("keys") or {}
+        models = cfg.get("models") or {}
         try:
-            self.on_log("\n########## 🤖 GEMINI AI 취약점 분석 에이전트 (/test) ##########")
-            self.on_log(f"[*] 대상: {target}  ·  스캐너 결과 {len(findings)}건을 함께 분석")
-            res = llm_agent.analyze(target, findings, api_key=api_key or None,
-                                    log=self.on_log)
-            if not res.get("ok"):
-                self.on_log(f"[!] Gemini 분석 실패: {res.get('error')}")
-                if res.get("raw"):
-                    self.on_log(f"    응답: {res['raw'][:300]}")
-                return
-            md = llm_agent.format_report(target, res)
+            self.on_log("\n########## 🤖 멀티-LLM + 로컬 ML/DL 앙상블 분석 (/test) ##########")
+            self.on_log(f"[*] 대상: {target}  ·  제공자: {provider}  ·  스캐너 결과 {len(findings)}건")
+            if provider == "all":
+                multi = llm_agent.analyze_multi(target, findings, ["all"], keys=keys,
+                                                models=models, log=self.on_log)
+                if not multi.get("ok"):
+                    self.on_log(f"[!] 분석 실패: {multi.get('error')}")
+                    return
+                md = llm_agent.format_multi_report(target, multi)
+                learn_from = [r["analysis"] for r in multi["results"] if r.get("ok")]
+            else:
+                res = llm_agent.analyze(target, findings, provider=provider,
+                                        model=models.get(provider) or None,
+                                        api_key=keys.get(provider) or None, log=self.on_log)
+                if not res.get("ok"):
+                    self.on_log(f"[!] 분석 실패: {res.get('error')}")
+                    if res.get("hint"):
+                        self.on_log(f"    💡 {res['hint']}")
+                    if res.get("raw"):
+                        self.on_log(f"    응답: {res['raw'][:300]}")
+                    return
+                md = llm_agent.format_report(target, res)
+                learn_from = [res["analysis"]]
             with self.lock:
                 self.llm_result_md = md
             for line in md.splitlines():
                 self.on_log(line)
-            # The ML/DL model learns from Gemini's high-confidence verdicts.
-            llm_agent.learn_from_llm(findings, res["analysis"], models_dir,
-                                        log=self.on_log)
-            self.on_log("[*] Gemini 분석 완료. (딥러닝/ML 모델과 병행 동작)")
+            # The local ML/DL model learns from each LLM's high-confidence verdicts.
+            for a in learn_from:
+                llm_agent.learn_from_llm(findings, a, models_dir, log=self.on_log)
+            self.on_log("[*] LLM 분석 완료. (딥러닝/ML 모델과 병행 동작)")
         except Exception as e:
-            self.on_log(f"[!] Gemini 에이전트 오류: {e}")
+            self.on_log(f"[!] LLM 에이전트 오류: {e}")
         finally:
             with self.lock:
                 self.llm_running = False
@@ -290,6 +306,11 @@ def create_app() -> Flask:
             "max_depth": int(o.get("max_depth", 2)),
             "max_pages": int(o.get("max_pages", 15)),
             "agent": o.get("agent", False),
+            # /start LLM co-pilot (supports each page's techniques + final review).
+            "agent_llm": o.get("agent_llm", False),
+            "llm_provider": (o.get("llm_provider") or "gemini"),
+            "llm_keys": o.get("llm_keys") or {},
+            "llm_models": o.get("llm_models") or {},
             "guided": data.get("guided", False),
             # Verification model (true-positive promotion + false-positive filtering).
             "fp_filter": o.get("fp_filter", True),
@@ -371,23 +392,51 @@ def create_app() -> Flask:
         })
         return jsonify({"ok": True})
 
+    @app.route("/api/providers")
+    def api_providers():
+        """LLM providers + models for the /test picker and /model command."""
+        from core import llm_agent
+        return jsonify({"providers": llm_agent.providers_public()})
+
     @app.route("/api/test", methods=["POST"])
     def api_test():
-        """Launch the Gemini AI vulnerability-analysis agent (runs with the ML model)."""
+        """Launch the multi-LLM vulnerability-analysis agent (runs with the ML model)."""
         from core import llm_agent
         data = request.get_json(force=True) or {}
         target = (data.get("target") or "").strip()
-        api_key = (data.get("api_key") or "").strip()
+        provider = (data.get("provider") or "gemini").strip()
+        keys = data.get("keys") or {}
+        models = data.get("models") or {}
+        # Legacy single-key field → gemini.
+        if data.get("api_key") and provider != "all":
+            keys.setdefault(provider, data.get("api_key"))
         if not target:
             return jsonify({"error": "대상 URL을 입력하세요."}), 400
-        if not llm_agent.available():
-            return jsonify({"error": "google-genai SDK 미설치 — pip install google-genai"}), 400
-        if not llm_agent.key_available(api_key):
-            return jsonify({"error": "Gemini API 토큰이 필요합니다.", "need_key": True}), 400
+        if provider == "all":
+            has = any(llm_agent.key_available(p, keys.get(p)) for p in llm_agent.PROVIDER_ORDER)
+            if not has:
+                return jsonify({"error": "제공자 키가 하나도 없습니다. /key 로 키를 설정하세요.",
+                                "need_key": True}), 400
+        else:
+            if provider not in llm_agent.PROVIDERS:
+                return jsonify({"error": f"알 수 없는 제공자: {provider}"}), 400
+            if not llm_agent.available(provider):
+                pkg = "google-genai" if provider == "gemini" else "openai"
+                return jsonify({"error": f"{pkg} SDK 미설치 — pip install {pkg}"}), 400
+            if not llm_agent.key_available(provider, keys.get(provider)):
+                return jsonify({"error": f"{llm_agent.PROVIDERS[provider]['label']} API 키가 필요합니다.",
+                                "need_key": True, "provider": provider}), 400
         mdir = os.path.join(_ROOT, "models")
-        if not session.start_llm_test(target, api_key, mdir):
+        cfg = {"provider": provider, "keys": keys, "models": models}
+        if not session.start_llm_test(target, cfg, mdir):
             return jsonify({"error": "스캔/분석이 이미 진행 중입니다."}), 409
         return jsonify({"ok": True})
+
+    @app.route("/api/models")
+    def api_models():
+        """Back-compat: Gemini model list for the /model command."""
+        from core import llm_agent
+        return jsonify({"models": llm_agent.GEMINI_MODELS, "default": llm_agent.MODEL})
 
     @app.route("/api/sast", methods=["POST"])
     def api_sast():

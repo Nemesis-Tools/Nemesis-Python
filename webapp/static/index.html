@@ -336,25 +336,93 @@ let reports=[], recordings=[];   // {ts, url}
 let loginCreds={login_url:'',username:'',password:''}, loginState=null;
 let credState=null, credBuf={}, credPrompting=false;
 let keyState=null, testActive=false, testPoller=null, testSeen=false;
-function beginKeyPrompt(){
-  keyState='key'; ensureTerminal(); setPwMode(true);
-  termLog('🔑 Gemini API 토큰(AIza…)을 붙여넣고 Enter 하세요. (이 브라우저에만 저장 · env GEMINI_API_KEY 를 쓰면 그냥 Enter)');
+// ---- LLM provider + model selection (/test picker, /model, /key) ----
+let providers=[], numMode=null, pendingTest=null;   // numMode: 'provider'|'model'|null
+async function loadProviders(){
+  try{ const j=await (await fetch('/api/providers')).json(); providers=j.providers||[]; }
+  catch(e){ providers=[]; }
+}
+function provById(id){ return providers.find(p=>p.id===id); }
+function curProvider(){ const id=localStorage.getItem('nemesisProvider')||'gemini'; return provById(id)?id:'gemini'; }
+function keyFor(id){ return localStorage.getItem('nemesisKey_'+id)||''; }
+function modelFor(id){ const p=provById(id); return localStorage.getItem('nemesisModel_'+id)||(p?p.default:''); }
+function allKeys(){ const o={}; providers.forEach(p=>{ const k=keyFor(p.id); if(k) o[p.id]=k; }); return o; }
+function allModels(){ const o={}; providers.forEach(p=>{ o[p.id]=modelFor(p.id); }); return o; }
+function printProviders(){
+  if(!providers.length){ termLog('제공자 목록 로딩 중… 잠시 후 /test 다시 입력.'); loadProviders(); return; }
+  termLog('── /test 실행할 LLM 제공자 선택 ──');
+  termLog(' 1.  전체 사용 (키 있는 모든 제공자로 교차 검증)');
+  providers.forEach((p,i)=>termLog(String(i+2).padStart(2,' ')+'.  '+p.label+'   '+(keyFor(p.id)?'✓키':'✗키')+'  · '+p.free));
+  termLog('▶ 번호를 입력하세요. (키가 없으면 입력 요청)'); numMode='provider';
+}
+function pickTestProvider(n){
+  numMode=null; let pid;
+  if(n===1) pid='all';
+  else if(n>=2 && n<=providers.length+1) pid=providers[n-2].id;
+  else { termLog('범위를 벗어난 번호: '+n); return; }
+  if(pid!=='all') localStorage.setItem('nemesisProvider',pid);
+  termLog('▶ 선택: '+(pid==='all'?'전체 사용':provById(pid).label));
+  runTestWith(pid);
+}
+function printModels(){
+  const pid=curProvider(), p=provById(pid);
+  if(!p){ termLog('제공자 목록 로딩 중… 잠시 후 /model 다시 입력.'); loadProviders(); return; }
+  const cur=modelFor(pid); termLog('현재 제공자: '+p.label+' · 모델: '+cur+'\n── 모델 목록 ──');
+  p.models.forEach((m,i)=>termLog(String(i+1).padStart(2,' ')+'.  '+m+(m===cur?'   ← 현재':'')));
+  termLog('▶ 번호를 입력하면 모델이 즉시 변경됩니다.'); numMode='model';
+}
+function pickModel(n){
+  numMode=null; const pid=curProvider(), p=provById(pid);
+  if(!p||n<1||n>p.models.length){ termLog('범위를 벗어난 번호: '+n); return; }
+  const m=p.models[n-1]; localStorage.setItem('nemesisModel_'+pid,m);
+  termLog('✔ 모델 변경: '+p.label+' → '+m); toast('모델: '+m,'success');
+}
+// ---- real-terminal editing helpers ----
+// Command history persists across app restarts (localStorage), so ↑/↓ recalls
+// commands from previous sessions — like a real shell's ~/.bash_history.
+let cmdHist=(()=>{ try{ const h=JSON.parse(localStorage.getItem('nemesisCmdHist')||'[]'); return Array.isArray(h)?h:[]; }catch(e){ return []; } })();
+let histPos=cmdHist.length;
+function saveHist(){ try{ localStorage.setItem('nemesisCmdHist', JSON.stringify(cmdHist.slice(-200))); }catch(e){} }
+function setCaretEnd(el){ const n=el.value.length; el.setSelectionRange(n,n); }
+function tabComplete(el){
+  const sg=$('#termsuggest'), v=el.value;
+  if(!v.startsWith('/')) return;
+  const f=v.toLowerCase(), ms=SLASH.filter(([c])=>c.startsWith(f));
+  if(!ms.length) return;
+  if(ms.length===1){ el.value=ms[0][0]+' '; setCaretEnd(el); sg.style.display='none'; return; }
+  let pre=ms[0][0]; ms.forEach(([c])=>{ while(pre && !c.startsWith(pre)) pre=pre.slice(0,-1); });
+  if(pre.length>v.length){ el.value=pre; setCaretEnd(el); }
+  sg.innerHTML=ms.map(([c,d])=>`<div class="sgrow" data-c="${c}"><b>${c}</b><span class="muted">${d}</span></div>`).join('');
+  sg.style.display='block';
+  sg.querySelectorAll('.sgrow[data-c]').forEach(r=>r.onclick=()=>{ if(r.dataset.c){ el.value=r.dataset.c+' '; } el.focus(); sg.style.display='none'; });
+}
+function beginKeyPrompt(pid){
+  pid=pid||curProvider(); keyState=pid; ensureTerminal(); setPwMode(true);
+  const p=provById(pid);
+  termLog('🔑 '+(p?p.label:pid)+' API 키를 붙여넣고 Enter 하세요. (이 브라우저에만 저장'+(p?' · 발급: '+p.keys_url:'')+')');
   setTimeout(()=>$('#terminput').focus(),0);
 }
-async function runTest(){
+async function runTest(){                       // /test → 제공자 선택 메뉴
   const target=$('#url').value.trim();
   if(!target){ termLog('✗ 대상 URL을 상단에 먼저 입력하세요.'); toast('대상 URL을 입력하세요','error'); return; }
-  if(testActive){ termLog('이미 Gemini 분석이 진행 중입니다.'); return; }
-  const key=localStorage.getItem('nemesisGeminiKey')||'';
-  termLog('🧠 Gemini AI 취약점 분석 에이전트 시작 — 리컨·검수·권장공격 (딥러닝/ML 모델과 병행)…');
+  if(testActive){ termLog('이미 분석이 진행 중입니다.'); return; }
+  printProviders();
+}
+async function runTestWith(provider){
+  const target=$('#url').value.trim();
+  if(!target){ termLog('✗ 대상 URL을 먼저 입력하세요.'); return; }
+  if(testActive){ termLog('이미 분석이 진행 중입니다.'); return; }
+  const plabel=provider==='all'?'전체 제공자':(provById(provider)?provById(provider).label:provider);
+  termLog('🧠 '+plabel+' + 로컬 ML/DL 앙상블 분석 시작 — 리컨·검수·권장공격…');
   let j;
   try{
-    const r=await fetch('/api/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target,api_key:key})});
+    const r=await fetch('/api/test',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({target,provider,keys:allKeys(),models:allModels()})});
     j=await r.json();
-    if(!r.ok){ if(j.need_key){ termLog('🔑 Gemini API 토큰이 필요합니다.'); beginKeyPrompt(); return; }
+    if(!r.ok){ if(j.need_key){ termLog('🔑 '+plabel+' 키가 필요합니다.'); pendingTest=provider; beginKeyPrompt(j.provider||(provider==='all'?curProvider():provider)); return; }
       throw new Error(j.error||'시작 실패'); }
-  }catch(e){ toast(e.message||'Gemini 분석 실패','error'); termLog('✗ '+(e.message||'실패')); return; }
-  toast('Gemini 분석을 시작합니다','info');
+  }catch(e){ toast(e.message||'분석 실패','error'); termLog('✗ '+(e.message||'실패')); return; }
+  toast(plabel+' 분석을 시작합니다','info');
   testActive=true; testSeen=false;
   try{ const s=await (await fetch('/api/state?logs=0&finds=0')).json(); logCur=s.log_total; }catch(e){}
   clearInterval(testPoller); testPoller=setInterval(pollTest,700); pollTest();
@@ -366,14 +434,14 @@ async function pollTest(){
     if(s.llm_running) testSeen=true;
     if(testSeen && !s.llm_running){
       clearInterval(testPoller); testActive=false;
-      if(s.llm_result){ addLlmReport(s.llm_result); toast('Gemini 분석 완료 · 보고서 저장됨','success',3400); }
-      else toast('Gemini 분석 종료','info');
+      if(s.llm_result){ addLlmReport(s.llm_result); toast('LLM 분석 완료 · 보고서 저장됨','success',3400); }
+      else toast('LLM 분석 종료','info');
     }
   }catch(e){}
 }
 function addLlmReport(md){
   const url=URL.createObjectURL(new Blob([md],{type:'text/markdown'}));
-  reports.unshift({ts:nowStamp()+' · Gemini', url}); $('#btnReport').disabled=false;
+  reports.unshift({ts:nowStamp()+' · LLM', url}); $('#btnReport').disabled=false;
   if($('#files').classList.contains('open') && $('#files').dataset.kind==='report') renderFiles('report');
 }
 // ---- SAST (소스코드 취약점 분석) ----
@@ -417,10 +485,12 @@ function beginCredPrompt(){
   termLog('아이디/이메일:'); setTimeout(()=>$('#terminput').focus(),0);
 }
 const SLASH=[['/help','명령어 목록'],['/start','🤖 AI 공격 에이전트 시작 — 크롤·분석(ML)·실제 공격 (/start [url])'],
-  ['/test','🧠 Gemini AI 취약점 분석 에이전트 — 리컨·검수·권장공격 (딥러닝/ML 모델과 병행, /test [url])'],
+  ['/test','🧠 멀티-LLM 취약점 분석 — 제공자 선택(전체/Gemini/Groq/OpenAI…) + 로컬 ML 앙상블 (/test [url])'],
   ['/sast','🔬 소스코드 취약점 분석(SAST) — CWE 휴리스틱 + CodeBERT (/sast <파일/폴더 경로>)'],
+  ['/model','현재 제공자의 모델 변경 — 목록 표시 후 숫자 입력'],
+  ['/key','LLM 제공자 API 키 저장/삭제 (/key <제공자>, /key 로 목록)'],
   ['/attack','공격 기법 목록 (번호 입력 시 단독 실행) · /attack <검색어> 로 필터'],
-  ['/login','자동 로그인 미리 설정'],['/geminikey','Gemini API 토큰 저장/삭제'],
+  ['/login','자동 로그인 미리 설정'],
   ['/stop','스캔 중지'],['/status','대상/로그인/선택 상태'],['/clearlogin','로그인 정보 삭제'],['/clear','터미널 지우기']];
 function termLog(s){ const el=$('#log'); el.textContent+=s+'\n'; el.scrollTop=el.scrollHeight; }
 function setPwMode(on){ const el=$('#terminput'); el.type=on?'password':'text';
@@ -447,10 +517,12 @@ function runAttackByIndex(n){
 function handleTerm(val){
   if(keyState){
     termLog('› ••••••••');
-    if(val.trim()){ localStorage.setItem('nemesisGeminiKey', val.trim());
-      termLog('✔ Gemini 토큰 저장됨 (이 브라우저에만 보관). 이제 /test 를 실행하세요.'); toast('토큰 저장됨','success'); }
-    else termLog('토큰 미입력 — 취소됨.');
-    keyState=null; setPwMode(false); return;
+    const pid=keyState; keyState=null; setPwMode(false);
+    if(val.trim()){ localStorage.setItem('nemesisKey_'+pid, val.trim());
+      const p=provById(pid); termLog('✔ '+(p?p.label:pid)+' 키 저장됨 (이 브라우저에만 보관).'); toast('키 저장됨','success');
+      if(pendingTest){ const pt=pendingTest; pendingTest=null; runTestWith(pt); } }
+    else { termLog('키 미입력 — 취소됨.'); pendingTest=null; }
+    return;
   }
   if(credState){
     termLog('› '+(credState==='pass'?'••••••':val));
@@ -472,25 +544,39 @@ function handleTerm(val){
   }
   const t=val.trim();
   if(t==='') return;
-  if(/^\d+$/.test(t)){ runAttackByIndex(parseInt(t,10)); return; }
+  if(/^\d+$/.test(t)){
+    if(numMode==='provider'){ pickTestProvider(parseInt(t,10)); return; }
+    if(numMode==='model'){ pickModel(parseInt(t,10)); return; }
+    runAttackByIndex(parseInt(t,10)); return; }
+  numMode=null;                                          // any non-number command cancels number-pick
   const parts=t.split(/\s+/); let cmd=parts[0].toLowerCase(); if(cmd[0]==='/') cmd=cmd.slice(1);
   if(cmd===''||cmd==='help'){ termLog('명령어:'); SLASH.forEach(([c,d])=>termLog('  '+c.padEnd(13,' ')+d)); }
   else if(cmd==='attack'){ printAttack(parts.slice(1).join(' ')); }
   else if(cmd==='login'){ loginState='url'; termLog('로그인 URL (엔터 = 대상 URL에서 폼 자동탐색):'); }
   else if(cmd==='clearlogin'){ loginCreds={login_url:'',username:'',password:''}; termLog('로그인 정보 삭제됨'); toast('로그인 정보 삭제','info'); }
-  else if(cmd==='status') termLog('대상: '+($('#url').value||'(없음)')+'\n로그인: '+(loginCreds.username?('user='+loginCreds.username+(loginCreds.login_url?', url='+loginCreds.login_url:' (대상 URL 폼)')):'(미설정)')+'\n선택 기법: '+selectedModules().length+'개');
+  else if(cmd==='status'){ const pid=curProvider(), p=provById(pid);
+    const keyed=providers.filter(x=>keyFor(x.id)).map(x=>x.label);
+    termLog('대상: '+($('#url').value||'(없음)')+'\n로그인: '+(loginCreds.username?('user='+loginCreds.username+(loginCreds.login_url?', url='+loginCreds.login_url:' (대상 URL 폼)')):'(미설정)')+'\n선택 기법: '+selectedModules().length+'개\n현재 제공자: '+(p?p.label:pid)+' · 모델: '+modelFor(pid)+'\n키 보유 제공자: '+(keyed.length?keyed.join(', '):'(없음)')); }
+  else if(cmd==='model'){ if(parts[1]&&/^\d+$/.test(parts[1])) pickModel(parseInt(parts[1],10)); else printModels(); }
   else if(cmd==='start'){ if(parts[1]) $('#url').value=parts[1];
     if(!$('#url').value.trim()){ termLog('✗ 대상 URL을 상단에 먼저 입력하세요.'); toast('대상 URL을 입력하세요','error'); return; }
-    termLog('🤖 AI 공격 에이전트 시작 — 사이트 크롤·메뉴 이동 → 취약점 분석(ML) → 실제 공격·체인. (기법 '+selectedModules().length+'개)');
+    { const keyed=providers.filter(x=>keyFor(x.id)).length;
+      termLog('🤖 AI 공격 에이전트 시작 — 사이트 크롤·메뉴 이동 → 취약점 분석(로컬 ML/DL 검증) → 실제 공격·체인. (기법 '+selectedModules().length+'개)'
+        +(keyed?'\n🧠 LLM 서포트 ON ('+ (provById(curProvider())||{}).label +') — 각 페이지 공격 기법을 실시간 보조 + 종료 후 전체 검수':'\n(LLM 서포트 OFF — /key 로 키를 넣으면 각 공격을 LLM이 보조)')); }
     startScan(true); }
   else if(cmd==='test'){ if(parts[1]) $('#url').value=parts[1]; runTest(); }
   else if(cmd==='sast'){ const p=parts.slice(1).join(' ').trim();
     if(!p){ termLog('사용법: /sast <소스 파일 또는 폴더 경로>   (예: /sast C:\\proj\\src)'); return; }
     runSast(p); }
-  else if(cmd==='geminikey'){
-    const sub=(parts[1]||'').toLowerCase();
-    if(sub==='clear'||sub==='delete'){ localStorage.removeItem('nemesisGeminiKey'); termLog('Gemini 토큰 삭제됨.'); toast('토큰 삭제','info'); }
-    else{ termLog(localStorage.getItem('nemesisGeminiKey')?'Gemini 토큰이 저장되어 있습니다. (지우려면 /geminikey clear)':'Gemini 토큰 미저장.'); beginKeyPrompt(); } }
+  else if(cmd==='key'||cmd==='geminikey'){
+    let pid=(cmd==='geminikey')?'gemini':(parts[1]||'').toLowerCase();
+    const sub=(cmd==='geminikey'?parts[1]:parts[2]||'').toLowerCase();
+    if(!pid){ termLog('── 제공자 키 상태 ──');
+      providers.forEach(p=>termLog('  '+p.id.padEnd(11,' ')+(keyFor(p.id)?'✓ 저장됨':'✗ 미저장')+'  '+p.label));
+      termLog('사용법: /key <제공자>  (예: /key groq)  ·  삭제: /key <제공자> clear'); return; }
+    if(!provById(pid)){ termLog('알 수 없는 제공자: '+pid+'  (/key 로 목록 확인)'); return; }
+    if(sub==='clear'||sub==='delete'){ localStorage.removeItem('nemesisKey_'+pid); termLog(provById(pid).label+' 키 삭제됨.'); toast('키 삭제','info'); }
+    else beginKeyPrompt(pid); }
   else if(cmd==='stop') stopScan();
   else if(cmd==='clear') $('#log').textContent='';
   else termLog('알 수 없는 명령: '+parts[0]+'   ( / 로 명령어 보기)');
@@ -657,6 +743,12 @@ async function launchScan(ids, note, guided, agent){
     opts.crawl=true; opts.agent=true;
     if(!(+opts.max_pages>=12)) opts.max_pages=20;
     if(!(+opts.max_depth>=2)) opts.max_depth=3;
+    // LLM co-pilot: if any provider key is stored, support each page's techniques.
+    const keys=allKeys();
+    if(Object.keys(keys).length){
+      opts.agent_llm=true; opts.llm_provider=curProvider();
+      opts.llm_keys=keys; opts.llm_models=allModels();
+    }
   }
   const target=$('#url').value.trim();
   const body={target, scope_ok:true, modules:ids, options:opts, guided:!!guided};
@@ -878,7 +970,27 @@ $$('#bottom .tab').forEach(t=>t.onclick=()=>{
   $('#terminput-row').style.display=isLog?'flex':'none';
   if(isLog) setTimeout(()=>$('#terminput').focus(),0);
 });
-$('#terminput').addEventListener('keydown',e=>{ if(e.key==='Enter'){ const v=e.target.value; e.target.value=''; $('#termsuggest').style.display='none'; handleTerm(v); } else if(e.key==='Escape'){ $('#termsuggest').style.display='none'; }});
+$('#terminput').addEventListener('keydown',e=>{
+  const el=e.target, sg=$('#termsuggest'), inPrompt=(credState||loginState||keyState);
+  if(e.key==='Enter'){ const v=el.value; el.value=''; sg.style.display='none';
+    if(v.trim() && !inPrompt && el.type!=='password'){ if(cmdHist[cmdHist.length-1]!==v){ cmdHist.push(v); if(cmdHist.length>200) cmdHist.shift(); saveHist(); } }
+    histPos=cmdHist.length; handleTerm(v); return; }
+  if(e.key==='Escape'){ sg.style.display='none'; return; }
+  if(e.key==='ArrowUp' && !inPrompt){ e.preventDefault(); if(cmdHist.length){ histPos=Math.max(0,histPos-1); el.value=cmdHist[histPos]||''; setCaretEnd(el); } return; }
+  if(e.key==='ArrowDown' && !inPrompt){ e.preventDefault(); if(cmdHist.length){ histPos=Math.min(cmdHist.length,histPos+1); el.value=histPos<cmdHist.length?cmdHist[histPos]:''; setCaretEnd(el); } return; }
+  if(e.key==='Tab'){ e.preventDefault(); if(!inPrompt) tabComplete(el); return; }
+  if(!e.ctrlKey) return;
+  const k=e.key.toLowerCase();
+  if(k==='l'){ e.preventDefault(); $('#log').textContent=''; return; }               // clear screen
+  if(k==='c'){ if(el.selectionStart===el.selectionEnd){ e.preventDefault(); termLog('› '+el.value+'^C'); el.value=''; sg.style.display='none';
+      if(inPrompt){ credState=loginState=keyState=null; setPwMode(false); termLog('(입력 취소됨)'); } numMode=null; pendingTest=null; } return; }  // SIGINT-style cancel
+  if(k==='u'){ e.preventDefault(); el.value=el.value.slice(el.selectionStart); el.setSelectionRange(0,0); return; }   // kill to line start
+  if(k==='k'){ e.preventDefault(); el.value=el.value.slice(0,el.selectionStart); return; }                            // kill to line end
+  if(k==='w'){ e.preventDefault(); const p=el.value.slice(0,el.selectionStart), rest=el.value.slice(el.selectionStart);
+    const np=p.replace(/\s*\S+\s*$/,''); el.value=np+rest; el.setSelectionRange(np.length,np.length); return; }        // delete prev word
+  if(k==='a'){ e.preventDefault(); el.setSelectionRange(0,0); return; }              // move to start
+  if(k==='e'){ e.preventDefault(); setCaretEnd(el); return; }                        // move to end
+});
 $('#terminput').addEventListener('input',e=>{
   const v=e.target.value, sg=$('#termsuggest');
   if(v.startsWith('/') && loginState===null){
@@ -906,7 +1018,7 @@ $('#winclose').onclick=()=>{ try{ window.pywebview.api.close(); }catch(e){ windo
   tb.addEventListener('mousedown', e=>{ if(e.target && e.target.closest && e.target.closest('.winbtn')) return; beginDrag(); });
   ['mouseup','pointerup','blur'].forEach(ev=>window.addEventListener(ev, endDrag));
 })();
-loadModules(); loadOpts();
+loadModules(); loadOpts(); loadProviders();
 </script>
 </body>
 </html>

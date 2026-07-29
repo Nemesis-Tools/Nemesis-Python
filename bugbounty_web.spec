@@ -43,7 +43,7 @@ hiddenimports += ["bs4", "trio", "trio_websocket",
                   "markupsafe", "blinker"]
 
 # Gemini AI agent (/test) — optional. Bundle google-genai + its deps if installed.
-for _pkg in ("google.genai", "google.auth", "websockets", "pydantic",
+for _pkg in ("google.genai", "google.auth", "websockets", "openai", "pydantic",
              "pydantic_core", "anyio", "sniffio", "certifi"):
     try:
         _d, _b, _h = collect_all(_pkg)

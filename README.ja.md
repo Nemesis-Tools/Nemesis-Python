@@ -8,7 +8,8 @@
 </p>
 
 <p align="center">
-  Selenium ベースの Web 脆弱性診断ツール · <b>HTTP/HTTPS</b> · <b>329 種</b>の手法 · <b>HackerOne 形式レポート（CWE/CVSS 自動）</b>
+  Selenium ベースの Web 脆弱性診断ツール · <b>HTTP/HTTPS</b> · <b>329 種</b>の手法 · <b>HackerOne 形式レポート（CWE/CVSS 自動）</b><br>
+  <b>ローカル ML/DL 検証モデル</b> + <b>マルチ LLM AI 分析</b>（Gemini·Groq·Cerebras·Mistral·OpenRouter·OpenAI） · <b>SAST ソースコード分析</b>
 </p>
 
 ---
@@ -126,15 +127,47 @@ powershell -ExecutionPolicy Bypass -File build_web_exe.ps1
 
 | コマンド | 説明 |
 |---|---|
-| `/start [url]` | **スキャン開始** —— 選択された手法で実行（ビューアで準備後にこのコマンドで実行） |
+| `/start [url]` | **AI 攻撃エージェント** —— サイトをクロール・巡回 → ローカル ML/DL 検証 → 実攻撃・チェーン。キーがあれば各ページの手法を **LLM がリアルタイム補助** + 終了後に全体レビュー |
+| `/test [url]` | **マルチ LLM 分析** —— プロバイダ選択（全部 / Gemini / Groq / OpenAI…）→ リコン・検証・推奨攻撃をローカル ML と **アンサンブル** |
+| `/sast <パス>` | **ソースコード脆弱性分析（SAST）** —— CWE ヒューリスティックルール +（任意）CodeBERT/LineVul |
+| `/model` | 現在のプロバイダの LLM モデル一覧 → 番号で変更 |
+| `/key [プロバイダ]` | LLM プロバイダ API キーの保存/削除（`/key groq`、`/key groq clear`、`/key` で一覧） |
 | `/attack [検索語]` | 攻撃手法を番号付きで一覧 → **番号を入力するとその攻撃を単独実行** |
 | `/login` | 対話式の自動ログイン設定（URL → ID → パスワード） |
-| `/status` | 現在のスキャン状態を確認 |
+| `/status` | 対象 / プロバイダ / モデル / キー保有状態を確認 |
 | `/stop` | 実行中のスキャンを停止 |
 | `/clearlogin` | 保存済みのログイン情報を削除 |
 | `/clear` | 画面（ログ）をクリア |
 
 例：`/attack sqli` → `1` を入力 → 対象 URL に対して該当 SQLi モジュールを実際に実行。
+
+**ターミナルショートカット**（本物のシェルと同じ）：`↑`/`↓` コマンド履歴（再起動後も保持）· `Tab` 補完 ·
+`Ctrl+L` クリア · `Ctrl+C` キャンセル · `Ctrl+U`/`Ctrl+K` 行頭/行末まで削除 · `Ctrl+W` 単語削除 ·
+`Ctrl+A`/`Ctrl+E` 行頭/行末へ移動。
+
+## AI 分析 —— マルチ LLM + ローカル ML/DL アンサンブル
+
+ローカルモデル（常時動作・外部依存ゼロ）とクラウド LLM（任意・無料枠）を**併用**し、真陽性を高め誤検知を
+減らします。**認可されたスキャンのコパイロット補助**であり、自律的なエクスプロイト生成は行いません。
+
+- **`/test`（マルチ LLM）** —— リコン + ローカル ML の検出（ルールスコア・真陽性確率つき）を LLM に渡し、
+  実際の悪用可能性・深刻度を再判定し次の攻撃を提案。**複数プロバイダの選択**や**全部使用**でクロス合意も。
+  LLM の判定は `feedback.jsonl` に学習ラベルとして保存 —— ローカルモデルが LLM から学習。
+- **プロバイダ（無料枠）** —— Gemini（flash 無料）· **Groq**（無料・カード不要、推奨）· Cerebras（約 100 万 tokens/日）·
+  Mistral（Experiment 無料）· OpenRouter（`:free` モデル）· OpenAI。多くは OpenAI 互換 API。
+  キーは `/key <プロバイダ>`（ブラウザにのみ保存）または環境変数（`GEMINI_API_KEY`/`GROQ_API_KEY`…）。
+- **`/start` LLM コパイロット** —— キーがあればエージェントがページを巡回し、各ページの手法開始時に
+  **有望なパラメータ/推奨手法/ペイロードヒント**をリアルタイム補助（1 ページ 1 回・上限あり・失敗しても継続）、
+  終了時に全検出を LLM+ML アンサンブルで最終レビュー。
+
+## SAST —— ソースコード脆弱性分析（`/sast`）
+
+ブラックボックス（DAST）スキャナを補完するホワイトボックス分析。`/sast <ファイル/フォルダのパス>`。
+
+- **ヒューリスティック CWE ルールエンジン**（純 Python・常時動作）—— CWE-78/89/79/94/502/22/327/295/798/120/338
+  などを行単位で検出。
+- **CodeBERT/GraphCodeBERT 分類器**（任意、`pip install torch transformers`）—— `tools/train_sast.py` で
+  Devign/Big-Vul/Juliet を微調整し `models/sast_codebert/` に置くと自動ロード。**LineVul** 方式で脆弱行を特定。
 
 ## Nemesis ML Model
 

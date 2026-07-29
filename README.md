@@ -8,7 +8,8 @@
 </p>
 
 <p align="center">
-  Selenium 기반 웹 취약점 점검 도구 · <b>HTTP/HTTPS</b> · <b>329종</b> 기법 · <b>HackerOne 형식 리포트(CWE/CVSS 자동)</b>
+  Selenium 기반 웹 취약점 점검 도구 · <b>HTTP/HTTPS</b> · <b>329종</b> 기법 · <b>HackerOne 형식 리포트(CWE/CVSS 자동)</b><br>
+  <b>로컬 ML/DL 검수 모델</b> + <b>멀티-LLM AI 분석</b>(Gemini·Groq·Cerebras·Mistral·OpenRouter·OpenAI) · <b>SAST 소스코드 분석</b>
 </p>
 
 ---
@@ -122,15 +123,49 @@ powershell -ExecutionPolicy Bypass -File build_web_exe.ps1
 
 | 명령 | 설명 |
 |---|---|
-| `/start [url]` | **스캔 시작** — 선택된 기법으로 실행(뷰어에서 준비 후 이 명령으로 실행) |
+| `/start [url]` | **AI 공격 에이전트 시작** — 사이트 크롤·메뉴 이동 → 로컬 ML/DL 검증 → 실제 공격·체인. 키가 있으면 각 페이지에서 **LLM이 실시간 보조** + 종료 후 전체 검수 |
+| `/test [url]` | **멀티-LLM 취약점 분석** — 제공자 선택(전체/Gemini/Groq/OpenAI…) → 리컨·검수·권장공격을 로컬 ML과 **앙상블** |
+| `/sast <경로>` | **소스코드 취약점 분석(SAST)** — CWE 휴리스틱 룰 + (선택)CodeBERT/LineVul |
+| `/model` | 현재 제공자의 LLM 모델 목록 → 번호로 변경 |
+| `/key [제공자]` | LLM 제공자 API 키 저장/삭제(`/key groq`, `/key groq clear`, `/key` 로 목록) |
 | `/attack [검색어]` | 공격 기법을 번호와 함께 나열 → **번호 입력 시 해당 공격 단독 실행** |
 | `/login` | 대화식 자동 로그인 설정(URL → 아이디 → 비밀번호) |
-| `/status` | 현재 스캔 상태 확인 |
+| `/status` | 대상·제공자·모델·키 보유 상태 확인 |
 | `/stop` | 진행 중 스캔 중지 |
 | `/clearlogin` | 저장된 로그인 정보 삭제 |
 | `/clear` | 화면(로그) 지우기 |
 
 예: `/attack sqli` → `1` 입력 → 해당 SQLi 모듈을 대상 URL에 실제 실행.
+
+**터미널 단축키**(실제 셸과 동일): `↑`/`↓` 명령 이력(재시작 후에도 유지) · `Tab` 자동완성 ·
+`Ctrl+L` 화면 지움 · `Ctrl+C` 취소 · `Ctrl+U`/`Ctrl+K` 라인 앞/뒤 삭제 · `Ctrl+W` 단어 삭제 ·
+`Ctrl+A`/`Ctrl+E` 줄 처음/끝 이동.
+
+## AI 분석 — 멀티-LLM + 로컬 ML/DL 앙상블
+
+로컬 모델(항상 동작, 외부 의존성 0)과 클라우드 LLM(선택, 무료 티어)을 **함께** 구성해 정탐을
+높이고 오탐을 줄입니다. **인가된 대상의 스캐너 코파일럿 보조**이며, 자율 익스플로잇 생성은 하지 않습니다.
+
+- **`/test` (멀티-LLM)** — 대상 리컨 + 로컬 ML이 뽑은 발견(룰 점수·정탐확률 포함)을 LLM에 전달해
+  실제 취약 여부·심각도를 재판정하고 다음 공격을 제안. **여러 제공자를 선택**하거나 **전체 사용**으로
+  교차 합의(몇/몇 제공자가 실제로 판정)까지. LLM 판정은 `feedback.jsonl`에 학습 라벨로 저장 → 로컬
+  모델이 LLM에게 학습.
+- **제공자(무료 티어)** — Gemini(flash 무료) · **Groq**(무료·카드 불필요, 추천) · Cerebras(~1M 토큰/일) ·
+  Mistral(Experiment 무료) · OpenRouter(`:free` 모델 다수) · OpenAI. 대부분 OpenAI 호환 API.
+  키는 `/key <제공자>`로 브라우저에만 저장(앱은 저장 안 함), 또는 env(`GEMINI_API_KEY`/`GROQ_API_KEY`…).
+- **`/start` LLM 코파일럿** — 키가 있으면 에이전트가 페이지를 이동하며 각 페이지의 공격 기법이 시작될 때
+  **유망 파라미터·권장 기법·페이로드 힌트**를 실시간 보조(페이지당 1회·상한, 실패해도 스캔 계속),
+  종료 시 전체 발견을 LLM+ML 앙상블로 최종 검수.
+
+## SAST — 소스코드 취약점 분석 (`/sast`)
+
+블랙박스(DAST) 스캐너를 보완하는 화이트박스 소스코드 분석. `/sast <파일/폴더 경로>`.
+
+- **휴리스틱 CWE 룰 엔진**(순수 파이썬, 항상 동작) — CWE-78/89/79/94/502/22/327/295/798/120/338 등
+  라인 단위 탐지(bandit/semgrep 계열).
+- **CodeBERT/GraphCodeBERT 분류기**(선택, `pip install torch transformers`) — `tools/train_sast.py`로
+  Devign/Big-Vul/Juliet 파인튜닝 후 `models/sast_codebert/`에 두면 자동 로드. **LineVul** 방식으로
+  취약 라인까지 지목.
 
 ## Nemesis ML Model
 
@@ -143,10 +178,12 @@ powershell -ExecutionPolicy Bypass -File build_web_exe.ps1
   (numpy/torch 등 외부 의존성 0). 가중치: `models/vuln_model.json`.
 - **학습 데이터**: **268개 템플릿 기법 각각의 실제 탐지 시그니처** + 코드 모듈 큐레이션에서 정탐/오탐
   예시를 자동 생성(문자 특징 증강 포함). 재학습: `python tools/train_model.py`.
+- **학습/검증 분할 + 지표**: 증강 전 base를 학습/검증으로 분리(증강본 누수 방지) 후 **held-out에서
+  Precision·Recall·F1·ROC-AUC** 리포트(`core/metrics.py`, 순수 파이썬). 독립 평가: `python tools/eval_model.py`.
 - **앙상블 검수**: 규칙 점수 ⊕ ML `P(정탐)` 을 블렌딩 → **엄격 교차검증 게이트**(2차 독립 신호가
   없으면 오탐으로 제거, Critical은 검토용 유지). 모든 finding(전 329기법)에 공통 적용.
-- **피드백 학습**: 보고서의 👍정탐/👎오탐 → `models/feedback.jsonl` → 재학습 시 실제 라벨을
-  가중 반영(쓸수록 강화). 모델 부재 시 규칙 기반으로 자동 폴백.
+- **피드백 학습**: 보고서의 👍정탐/👎오탐 **및 LLM(`/test`) 판정** → `models/feedback.jsonl` → 재학습 시
+  실제 라벨을 가중 반영(사람 라벨 우선, LLM 라벨 보조). 모델 부재 시 규칙 기반으로 자동 폴백.
 
 ## 라이선스
 

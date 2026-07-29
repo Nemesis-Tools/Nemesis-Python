@@ -24,7 +24,7 @@ datas += collect_data_files("certifi")
 
 # pywebview + .NET backend (pythonnet); Gemini AI agent (/test, optional)
 for pkg in ("webview", "pythonnet", "clr_loader",
-            "google.genai", "google.auth", "websockets", "pydantic",
+            "google.genai", "google.auth", "websockets", "openai", "pydantic",
             "pydantic_core", "anyio", "sniffio", "certifi"):
     try:
         _d, _b, _h = collect_all(pkg)
