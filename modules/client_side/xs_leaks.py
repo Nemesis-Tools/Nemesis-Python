@@ -1,8 +1,10 @@
 """XS-Leaks candidate detection (cross-origin isolation posture).
 
-XS-Leaks abuse cross-site *observable* side channels (frame counts, load timing,
-error events, cache probing). This surfaces candidates by checking the response's
-cross-origin isolation headers (COOP/COEP/CORP) and framability. Detection only.
+XS-Leaks abuse cross-site *observable* side channels, which requires the resource
+to be **embeddable cross-site**. To avoid false positives (nearly every site omits
+COOP/COEP/CORP), this only reports when the response is BOTH framable (no
+X-Frame-Options / CSP frame-ancestors) AND missing cross-origin isolation — the
+actual precondition for an XS-Leaks oracle. One consolidated, low-severity finding.
 """
 from __future__ import annotations
 
@@ -18,7 +20,7 @@ class XSLeaks(BaseModule):
     name = "XS-Leaks isolation candidates"
     category = "Client-Side"
     default_enabled = True
-    description = "Checks COOP/COEP/CORP and framability that enable cross-site XS-Leaks oracles."
+    description = "Reports XS-Leaks oracle preconditions only when the page is framable AND lacks COOP/COEP/CORP."
 
     def run(self, ctx: ScanContext) -> list[Finding]:
         try:
@@ -26,29 +28,23 @@ class XSLeaks(BaseModule):
         except Exception:
             return []
         h = {k.lower(): v for k, v in r.headers.items()}
-        out: list[Finding] = []
 
+        # Precondition: the resource must be embeddable cross-site, or XS-Leaks don't apply.
+        framable = (not h.get("x-frame-options")) and \
+                   ("frame-ancestors" not in h.get("content-security-policy", "").lower())
+        if not framable:
+            return []
         missing = [x for x in _ISO if x not in h]
-        if missing:
-            out.append(Finding(
-                module_id=self.id, title="Missing cross-origin isolation headers (XS-Leaks surface)",
-                severity=Severity.LOW, url=ctx.target, confidence="Firm",
-                description=("Absent " + ", ".join(missing) + ". Without COOP/COEP/CORP, cross-site pages can "
-                             "reference this resource and observe side channels (frame counts, timing, error "
-                             "events) — the primitives behind XS-Leaks oracles."),
-                evidence=f"present isolation headers: {[x for x in _ISO if x in h]}",
-                remediation="Set COOP: same-origin, COEP: require-corp, and CORP: same-origin on sensitive endpoints."))
+        # CORP alone often suffices to block embedding side channels; require it (plus one more) missing.
+        if "cross-origin-resource-policy" not in missing or len(missing) < 2:
+            return []
 
-        xfo = h.get("x-frame-options", "")
-        csp = h.get("content-security-policy", "")
-        if not xfo and "frame-ancestors" not in csp.lower():
-            out.append(Finding(
-                module_id=self.id, title="Framable response (aids XS-Leaks & clickjacking)",
-                severity=Severity.LOW, url=ctx.target, confidence="Firm",
-                description=("No X-Frame-Options / CSP frame-ancestors — the page can be framed cross-site, "
-                             "enabling frame-count/timing XS-Leaks oracles (and clickjacking)."),
-                evidence="no X-Frame-Options and no CSP frame-ancestors",
-                remediation="Set CSP frame-ancestors 'none'/'self' or X-Frame-Options: DENY."))
-        if not out:
-            ctx.log("    cross-origin isolation posture OK / no XS-Leaks candidates")
-        return out
+        return [Finding(
+            module_id=self.id, title="XS-Leaks oracle preconditions present (framable + no isolation)",
+            severity=Severity.LOW, url=ctx.target, confidence="Tentative",
+            description=("The page is framable cross-site and sets no cross-origin isolation headers "
+                         "(" + ", ".join(missing) + "). Together these are the preconditions for XS-Leaks "
+                         "oracles (frame counts, load timing, error events). Real exploitability depends on "
+                         "per-user state differences on this endpoint — verify manually."),
+            evidence=f"framable=yes; missing isolation: {missing}",
+            remediation="Set COOP: same-origin, COEP: require-corp, CORP: same-origin; add frame-ancestors 'none'/'self'.")]

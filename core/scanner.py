@@ -32,6 +32,7 @@ from core.oob import OOBClient
 from core.result import Finding, Severity
 from core.crawler import extract_links, normalize, registrable
 from core import chain
+from core import verifier
 from modules.base import ScanContext, get_module
 
 # Modules whose result depends on the specific URL/parameters (run per page).
@@ -157,6 +158,9 @@ class Scanner:
         self.findings: list[Finding] = []
         # Populated by _auth_wall_signals(): reasons the target looks login-gated.
         self._auth_wall: list[str] = []
+        # De-dup keys already emitted (verification model).
+        self._seen: set = set()
+        self._dropped = 0
 
     def stop(self) -> None:
         self._stop.set()
@@ -165,10 +169,29 @@ class Scanner:
         self.on_log(msg)
 
     def _emit(self, results, ctx) -> int:
+        """Run each finding through the verification model: score → recalibrate
+        confidence → drop weak (FP) / promote strong (TP) → de-duplicate."""
+        opt = self.options
+        fp_filter = opt.get("fp_filter", True)
+        min_score = int(opt.get("min_score", 38))
+        strict = opt.get("review_strict", True)
+        n = 0
         for f in results or []:
+            key = verifier.dedup_key(f)
+            if key in self._seen:
+                continue
+            res = verifier.verify(f, min_score=min_score, fp_filter=fp_filter, strict=strict)
+            if not res["keep"]:
+                self._dropped += 1
+                self._log(f"    [verify] drop FP (score {res['score']}<{min_score}, "
+                          f"{f.confidence}): {(f.title or '')[:60]}")
+                continue
+            self._seen.add(key)
             self.findings.append(f)
             self.on_finding(f)
-        return len(results or [])
+            self._log(f"    [verify] keep (score {res['score']} → {f.confidence})")
+            n += 1
+        return n
 
     def _auto_login(self, browser, http, opt) -> None:
         """Log in via the target's form, then share the authenticated cookies
@@ -557,5 +580,8 @@ class Scanner:
         finally:
             browser.quit()
             self._log("\n[*] Browser closed. Scan complete.")
+            if self._dropped:
+                self._log(f"[*] 검증 모델: 저신뢰(오탐 의심) {self._dropped}건 필터링 → 최종 {len(self.findings)}건 "
+                          f"(정탐 위주로 재보정).")
             self.findings.sort(key=lambda f: f.severity.rank, reverse=True)
             self.on_done(self.findings)

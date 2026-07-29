@@ -42,6 +42,15 @@ class CSRFCheck(BaseModule):
         if not html:
             ctx.log("    could not load page")
             return []
+        # SameSite=Lax/Strict cookies already block cross-site form POST, so a missing
+        # token is not exploitable — skip to avoid the most common CSRF false positive.
+        try:
+            sc = (ctx.paced_get(ctx.target).headers.get("set-cookie") or "").lower()
+            if "samesite=lax" in sc or "samesite=strict" in sc:
+                ctx.log("    cookies are SameSite=Lax/Strict — cross-site POST blocked; CSRF skipped")
+                return []
+        except Exception:
+            pass
         forms = parse_forms(ctx.target, html)
         post_forms = [f for f in forms if f.method == "post"]
         if not post_forms:

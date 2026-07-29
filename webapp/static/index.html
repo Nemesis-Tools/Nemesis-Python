@@ -149,6 +149,10 @@
   #modal.open{display:flex}
   .mbox{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);width:min(820px,92vw);max-height:88vh;display:flex;flex-direction:column}
   .mbox .mhd{padding:10px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px}
+  .fbbtn{display:inline-flex;align-items:center;gap:5px}
+  .fbbtn svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  .fbbtn.tp:hover{color:#2e7d32;border-color:#2e7d32}
+  .fbbtn.fp:hover{color:#c62828;border-color:#c62828}
   .mbox pre{flex:1;overflow:auto;margin:0;padding:14px;font-family:var(--mono);font-size:12px;white-space:pre-wrap;color:var(--text)}
   .mbox .mft{padding:10px 14px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end}
   .muted{color:var(--muted)}
@@ -257,8 +261,11 @@
         <label style="color:var(--text)"><input type="checkbox" id="o_headless" checked> 헤드리스 브라우저</label>
         <label style="color:var(--text)"><input type="checkbox" id="o_devtools"> DevTools(F12) 자동 열기</label>
         <label style="color:var(--text)"><input type="checkbox" id="o_tls" checked> TLS 인증서 검증</label>
+        <label style="color:var(--text)"><input type="checkbox" id="o_fpfilter" checked> 검증 모델(오탐 필터 · 정탐 재보정)</label>
+        <label style="color:var(--text)"><input type="checkbox" id="o_strict" checked> 엄격 검수(2차 교차검증 · 오탐 최소화)</label>
         <div class="fld"><div><label>요청 간격(초)</label><input type="text" id="o_delay" value="0.5"></div>
         <div><label>페이지 타임아웃(초)</label><input type="text" id="o_timeout" value="20"></div></div>
+        <div class="fld"><div><label>최소 신뢰 점수(0–100, 낮을수록 더 많이 표시)</label><input type="text" id="o_minscore" value="38"></div></div>
       </div>
       <div class="sect" data-s="1" style="display:none">
         <label style="color:var(--text)"><input type="checkbox" id="o_crawl"> 같은 도메인 재귀 크롤(발견 페이지도 공격)</label>
@@ -310,7 +317,7 @@
 </footer>
 
 <div id="modal"><div class="mbox">
-  <div class="mhd"><b id="mtitle">보고서</b><span class="grow"></span><button id="mpoc" style="display:none">PoC HTML</button><button id="mshot" style="display:none">스크린샷</button><button id="mcurl">PoC(curl)</button><button id="mevi">증거</button><button id="mcopy">복사</button><button id="mclose">닫기</button></div>
+  <div class="mhd"><b id="mtitle">보고서</b><span class="grow"></span><button id="mpoc" style="display:none">PoC HTML</button><button id="mshot" style="display:none">스크린샷</button><button id="mtp" class="fbbtn tp" title="정탐으로 표시 → 모델 재학습 데이터"><svg viewBox="0 0 24 24"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg> 정탐</button><button id="mfp" class="fbbtn fp" title="오탐으로 표시 → 모델 재학습 데이터"><svg viewBox="0 0 24 24"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"/></svg> 오탐</button><button id="mcurl">PoC(curl)</button><button id="mevi">증거</button><button id="mcopy">복사</button><button id="mclose">닫기</button></div>
   <pre id="mbody"></pre>
 </div></div>
 
@@ -424,10 +431,12 @@ function renderFiles(kind){
   body.innerHTML=items.map((it,i)=>`<div class="frow" data-i="${i}">${FILE_SVG}<span>${it.ts}</span><span class="grow"></span><span class="dl">↓ 다운로드</span></div>`).join('');
   body.querySelectorAll('.frow').forEach(r=>r.onclick=()=>downloadFile(items[+r.dataset.i], kind));
 }
-function downloadFile(it, kind){
-  const a=document.createElement('a'); a.href=it.url;
-  a.download=(kind==='rec'?'live_recording_':'bugbounty_report_')+it.ts.replace(/[: ]/g,'_')+(kind==='rec'?'.webm':'.md');
-  a.click(); toast('다운로드를 시작합니다','success');
+async function downloadFile(it, kind){
+  const name=(kind==='rec'?'live_recording_':'bugbounty_report_')+it.ts.replace(/[: ]/g,'_')+(kind==='rec'?'.webm':'.md');
+  try{ const blob=await (await fetch(it.url)).blob();
+    await saveFile(blob, name, kind==='rec'?'video/webm':'text/markdown',
+      kind==='rec'?{'video/webm':['.webm']}:{'text/markdown':['.md']});
+  }catch(e){ toast('다운로드 실패','error'); }
 }
 async function addReportFile(){
   try{const md=await (await fetch('/api/report')).text();
@@ -465,6 +474,7 @@ function updateCount(){$('#selcount').textContent=selectedModules().length+'개'
 // ---- options ----
 function gatherOptions(){return{
   headless:$('#o_headless').checked, devtools:$('#o_devtools').checked, verify_tls:$('#o_tls').checked,
+  fp_filter:$('#o_fpfilter').checked, min_score:$('#o_minscore').value, review_strict:$('#o_strict').checked,
   delay:$('#o_delay').value, page_timeout:$('#o_timeout').value,
   crawl:$('#o_crawl').checked, max_depth:$('#o_depth').value, max_pages:$('#o_pages').value,
   user_agent:$('#o_ua').value, headers:$('#o_headers').value, cookies:$('#o_cookies').value,
@@ -648,7 +658,7 @@ function addFinding(f){
   findingsBuf.push(f);
   const tr=document.createElement('tr'); tr.className='fnd';
   tr.innerHTML=`<td><span class="sev" style="background:${SEV[f.severity]}">${f.severity}</span></td>
-    <td>${esc(f.title)}</td><td class="muted">${esc(f.confidence)}</td>
+    <td>${esc(f.title)}</td><td class="muted">${esc(f.confidence)}${(f.extra&&f.extra.confidence_score!=null)?` · ${f.extra.confidence_score}`:''}</td>
     <td class="muted" style="max-width:280px;overflow:hidden;text-overflow:ellipsis">${esc(f.url)}</td>
     <td class="muted">${esc(f.module_id)}</td>`;
   tr.addEventListener('click',()=>showReport(f.index));
@@ -658,7 +668,23 @@ function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>'
 
 // ---- report modal ----
 function findingByIndex(i){ return findingsBuf.find(f=>f.index===i) || findingsBuf[i] || null; }
-function dlBlob(blob, name){ const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),4000); }
+// Save a file, letting the user choose the location (File System Access API).
+// Falls back to a normal download (default folder) where the picker is unavailable.
+async function saveFile(data, name, mime, accept){
+  const blob=(data instanceof Blob)?data:new Blob([data],{type:mime||'application/octet-stream'});
+  if(window.showSaveFilePicker){
+    try{
+      const opts={suggestedName:name};
+      if(accept) opts.types=[{description:(name.split('.').pop()||'file').toUpperCase()+' 파일', accept:accept}];
+      const h=await window.showSaveFilePicker(opts);
+      const w=await h.createWritable(); await w.write(blob); await w.close();
+      toast('저장 완료: '+name,'success'); return true;
+    }catch(e){ if(e && e.name==='AbortError') return false; }   // user canceled
+  }
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+  toast('다운로드: '+name,'success'); return true;
+}
 function b64ToBytes(b64){ const bin=atob(b64); const u=new Uint8Array(bin.length); for(let k=0;k<bin.length;k++)u[k]=bin.charCodeAt(k); return u; }
 function slug(s){ return (s||'finding').replace(/[^a-z0-9_\-]+/gi,'_').slice(0,40); }
 // Reproduction (curl) + raw request note — works for ANY finding.
@@ -691,24 +717,32 @@ async function showReport(i){
   $('#mtitle').textContent='버그바운티 보고서';$('#mbody').textContent=md;$('#modal').classList.add('open');
   $('#mcopy').onclick=()=>{navigator.clipboard.writeText(md);toast('클립보드에 복사되었습니다','success');};
   const f=findingByIndex(i)||{}, ex=(f&&f.extra)||{}, base=slug(f.module_id);
-  // Always-available proof files for every finding.
-  $('#mcurl').onclick=()=>{ dlBlob(new Blob([buildCurl(f)],{type:'text/plain'}), base+'_poc.txt'); toast('PoC(curl) 다운로드','success'); };
-  $('#mevi').onclick=()=>{ dlBlob(new Blob([buildEvidence(f)],{type:'text/markdown'}), base+'_evidence.md'); toast('증거 파일 다운로드','success'); };
+  // Always-available proof files for every finding (pick save location).
+  $('#mcurl').onclick=()=>saveFile(buildCurl(f), base+'_poc.txt', 'text/plain', {'text/plain':['.txt']});
+  $('#mevi').onclick=()=>saveFile(buildEvidence(f), base+'_evidence.md', 'text/markdown', {'text/markdown':['.md']});
   // Rich HTML PoC / screenshot when the finding carries them (clickjacking, CSRF, CORS…).
   const poc=$('#mpoc'), shot=$('#mshot');
-  if(ex.poc_html){ poc.style.display=''; poc.onclick=()=>{ dlBlob(new Blob([ex.poc_html],{type:'text/html'}), base+'_poc.html'); toast('PoC HTML 다운로드','success'); }; }
+  if(ex.poc_html){ poc.style.display=''; poc.onclick=()=>saveFile(ex.poc_html, base+'_poc.html', 'text/html', {'text/html':['.html']}); }
   else poc.style.display='none';
-  if(ex.screenshot_b64){ shot.style.display=''; shot.onclick=()=>{ dlBlob(new Blob([b64ToBytes(ex.screenshot_b64)],{type:'image/png'}), base+'_poc.png'); toast('스크린샷 다운로드','success'); }; }
+  if(ex.screenshot_b64){ shot.style.display=''; shot.onclick=()=>saveFile(new Blob([b64ToBytes(ex.screenshot_b64)],{type:'image/png'}), base+'_poc.png', 'image/png', {'image/png':['.png']}); }
   else shot.style.display='none';
+  // Feedback → learning data (retrain with tools/train_model.py to apply).
+  $('#mtp').onclick=()=>sendFeedback(i,1);
+  $('#mfp').onclick=()=>sendFeedback(i,0);
+}
+async function sendFeedback(i,label){
+  try{ const r=await fetch('/api/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({index:i,label})});
+    if(!r.ok) throw 0;
+    toast(label?'정탐으로 학습 데이터에 추가':'오탐으로 학습 데이터에 추가','success');
+  }catch(e){ toast('피드백 전송 실패','error'); }
 }
 async function downloadFullReport(){
   const md=await (await fetch('/api/report')).text();
-  const blob=new Blob([md],{type:'text/markdown'});const a=document.createElement('a');
-  a.href=URL.createObjectURL(blob);a.download='bugbounty_report.md';a.click();
+  await saveFile(md, 'bugbounty_report.md', 'text/markdown', {'text/markdown':['.md']});
 }
 
 // ---- settings persistence + open/close ----
-const OPT_IDS=['o_headless','o_devtools','o_tls','o_delay','o_timeout','o_crawl','o_depth','o_pages','o_ua','o_headers','o_cookies','o_canary','o_poll'];
+const OPT_IDS=['o_headless','o_devtools','o_tls','o_fpfilter','o_strict','o_minscore','o_delay','o_timeout','o_crawl','o_depth','o_pages','o_ua','o_headers','o_cookies','o_canary','o_poll'];
 let _optSnap={};
 function getOpts(){const o={};OPT_IDS.forEach(id=>{const el=$('#'+id);if(el)o[id]=el.type==='checkbox'?el.checked:el.value;});return o;}
 function setOpts(o){OPT_IDS.forEach(id=>{const el=$('#'+id);if(!el||!(id in o))return;if(el.type==='checkbox')el.checked=o[id];else el.value=o[id];});}

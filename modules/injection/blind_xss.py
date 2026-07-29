@@ -60,13 +60,8 @@ class BlindXSS(BaseModule):
                             "stored/reflected unencoded — a stored-XSS candidate. Verify execution context manually.",
                 evidence=f"marker '{marker}' found in response after injection",
                 remediation="Context-aware output encoding; sanitize stored content; CSP.")]
-        return [Finding(
-            module_id=self.id, title="Blind XSS payloads sent (no canary) — no in-band reflection",
-            severity=Severity.INFO, url=ctx.target, confidence="Tentative",
-            description="Blind/stored XSS payloads were injected but no marker reflected in-band. It may still fire "
-                        "later in another context (e.g. an admin panel) — configure an OOB canary to catch that.",
-            evidence="markers injected into all discovered points",
-            remediation="Configure an OOB poll URL for auto-confirmation of blind/stored XSS.")]
+        # No in-band reflection → no confirmable signal; stay silent (avoid FP).
+        return []
 
     def run(self, ctx: ScanContext) -> list[Finding]:
         oob = ctx.oob

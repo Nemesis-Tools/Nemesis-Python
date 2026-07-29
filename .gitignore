@@ -8,4 +8,6 @@ dist/
 *.json
 !requirements*.json
 !webapp/static/index.html
+!models/vuln_model.json
+models/feedback.jsonl
 .DS_Store

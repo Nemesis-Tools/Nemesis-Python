@@ -12,7 +12,8 @@ _mani = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(_mani)
 MODULE_LEAVES = list(_mani.MODULE_MODULES)
 
-datas = [("webapp/static/index.html", "webapp/static"), ("logo.png", "."), ("logo.ico", ".")]
+datas = [("webapp/static/index.html", "webapp/static"), ("logo.png", "."), ("logo.ico", "."),
+         ("models/vuln_model.json", "models")]
 binaries = []
 hiddenimports = []
 

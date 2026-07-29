@@ -194,10 +194,16 @@ def make_template_module(t: dict):
     return register(cls)
 
 
+# Every registered template dict, kept so the ML trainer can derive a per-technique
+# training example from each technique's own detection signature (covers all modules).
+ALL_TEMPLATES: list[dict] = []
+
+
 def register_templates(templates: list[dict]) -> None:
     for t in templates:
         try:
             make_template_module(t)
+            ALL_TEMPLATES.append(t)
         except Exception:
             # skip duplicate/broken template, keep the rest
             pass

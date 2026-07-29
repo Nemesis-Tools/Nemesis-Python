@@ -50,14 +50,7 @@ class RFI(BaseModule):
                         remediation="Never build include paths/URLs from user input; disable allow_url_include; allow-list."))
                     return findings
             tested.append(pt.label())
-        if tested:
-            findings.append(Finding(
-                module_id=self.id, title="RFI in-band probes sent — no include error surfaced",
-                severity=Severity.INFO, url=ctx.target, confidence="Tentative",
-                description="Include-style params were probed with remote URLs/wrappers but no error was reflected. "
-                            "Blind RFI may still exist — configure an OOB canary for callback confirmation.",
-                evidence="\n".join(tested[:40]),
-                remediation="Configure an OOB poll URL for auto-confirmation, or review include handling."))
+        # No include error reflected → no confirmable signal; stay silent (avoid FP).
         return findings
 
     def run(self, ctx: ScanContext) -> list[Finding]:

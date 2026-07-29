@@ -52,18 +52,19 @@ class MXSS(BaseModule):
         sinks = data.get("sinks") or []
         libs = data.get("libs") or []
         untrusted = bool(data.get("usesUntrusted"))
-        out: list[Finding] = []
-        if sinks and (untrusted or libs):
-            out.append(Finding(
-                module_id=self.id, title="mXSS candidate: HTML sink + sanitizer/untrusted input",
-                severity=Severity.LOW, url=ctx.target, confidence="Tentative",
-                description=("The page writes HTML via " + ", ".join(sinks) +
-                             (" using untrusted input (location/name/referrer/hash)" if untrusted else "") +
-                             ((" and includes " + ", ".join(libs)) if libs else "") +
-                             ". Sanitizer/parse round-trips through these sinks can mutate into executable markup (mXSS)."),
-                evidence=f"sinks={sinks} libs={libs} untrusted_input={untrusted}",
-                remediation=("Avoid innerHTML with untrusted data; prefer textContent, enable Trusted Types, and "
-                             "use an up-to-date sanitizer with a strict configuration.")))
-        elif sinks:
-            ctx.log(f"    HTML sinks present ({sinks}) but no clear untrusted feed — low mXSS likelihood")
-        return out
+        # Require a concrete untrusted-input → HTML-sink flow. Library presence alone
+        # (e.g. jQuery on the page) is NOT evidence of mXSS and produced huge noise.
+        if not (sinks and untrusted):
+            if sinks:
+                ctx.log(f"    HTML sinks present ({sinks}) but no untrusted feed — not reported")
+            return []
+        return [Finding(
+            module_id=self.id, title="mXSS candidate: untrusted input flows into an HTML sink",
+            severity=Severity.LOW, url=ctx.target, confidence="Tentative",
+            description=("The page writes HTML via " + ", ".join(sinks) + " using untrusted input "
+                         "(location/name/referrer/hash)" + ((" with " + ", ".join(libs)) if libs else "") +
+                         ". Sanitizer/parse round-trips through these sinks can mutate into executable markup (mXSS). "
+                         "Verify the exact source→sink path manually."),
+            evidence=f"sinks={sinks} libs={libs} untrusted_input=True",
+            remediation=("Avoid innerHTML with untrusted data; prefer textContent, enable Trusted Types, and "
+                         "use an up-to-date sanitizer with a strict configuration."))]

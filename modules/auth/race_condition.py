@@ -37,7 +37,9 @@ class RaceCondition(BaseModule):
                 continue
             action = form.action or ctx.target
             names = " ".join(form.field_names)
-            if _SENSITIVE.search(action) or _SENSITIVE.search(names):
+            # Require the sensitive keyword in the ENDPOINT PATH (a real state-changing action).
+            # Field-name-only matches (e.g. a search form with a "report" field) were noisy.
+            if _SENSITIVE.search(action) and form.field_names:
                 if not _NONCE.search(names):
                     out.append(Finding(
                         module_id=self.id, title=f"Race/TOCTOU candidate: {action}",

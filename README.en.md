@@ -142,6 +142,24 @@ Type `/` in the bottom TERMINAL to open the command popover.
 
 Example: `/attack sqli` → enter `1` → runs that SQLi module against the target URL for real.
 
+## Nemesis ML Model
+
+A two-stage (detect → review) pipeline that recalibrates findings toward true positives and cuts false positives.
+
+- **Features (41)**: 17 engineered (self-confidence, module precision, evidence strength, status code,
+  token, active proof, severity, …) + **24 character-3gram hashing buckets** (deterministic FNV-1a, with
+  URL/HTML decode + normalize) — so the model **learns signature/payload text** (`root:x:0:0`, `ORA-01756`,
+  DB error strings) from data instead of hard-coded regex only.
+- **Classifier**: an MLP `41 → 20 → 1` (tanh hidden + sigmoid output), trained and run with **pure-Python
+  backprop** (no numpy/torch — zero external dependency). Weights: `models/vuln_model.json`.
+- **Training data**: auto-generated TP/FP examples from **each of the 268 template techniques' own
+  detection signatures** + curated code-module prototypes. Retrain: `python tools/train_model.py`.
+- **Ensemble review**: rule score ⊕ ML `P(true-positive)`, then a **strict corroboration gate** (drop
+  borderline findings lacking a second independent signal; Criticals are always kept for review).
+  Applied to every finding across all 329 techniques.
+- **Feedback learning**: 👍/👎 in the report → `models/feedback.jsonl` → retraining weights real labels
+  (improves with use). Falls back to the rule model when no trained model is present.
+
 ## License
 
 This project is distributed under the **MIT License**. See the [LICENSE](LICENSE) file for the full text.

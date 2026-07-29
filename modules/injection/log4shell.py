@@ -57,16 +57,10 @@ class Log4Shell(BaseModule):
             except Exception:
                 pass
             tested.append(f"header {header}")
-        if not tested:
-            return []
-        return [Finding(
-            module_id=self.id, title="Log4Shell JNDI payloads sent (no canary) — needs OOB to confirm",
-            severity=Severity.INFO, url=ctx.target, confidence="Tentative",
-            description="JNDI ${jndi:...} payloads were injected into parameters and commonly-logged headers. "
-                        "Log4Shell is blind and cannot be confirmed in-band — configure an OOB canary to catch "
-                        "the callback and confirm remote code execution.",
-            evidence="\n".join(tested[:60]),
-            remediation="Patch Log4j (>=2.17.1); set formatMsgNoLookups; remove JndiLookup. Add an OOB canary to confirm.")]
+        # Log4Shell is blind: without an OOB canary there is no in-band signal, so we
+        # inject the payloads (they may land in your OOB logs elsewhere) but emit NO
+        # finding — reporting "payloads sent" would be a false positive.
+        return []
 
     def run(self, ctx: ScanContext) -> list[Finding]:
         oob = ctx.oob

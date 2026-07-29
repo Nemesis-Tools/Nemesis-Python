@@ -127,6 +127,22 @@ powershell -ExecutionPolicy Bypass -File build_web_exe.ps1
 
 示例：`/attack sqli` → 输入 `1` → 对目标 URL 实际执行该 SQLi 模块。
 
+## Nemesis ML Model
+
+一个两阶段（检测 → 审核）流水线，把结果向真阳性重校准并减少误报。
+
+- **特征（41）**：17 个工程特征（自置信度、模块精度、证据强度、状态码、令牌、主动佐证、严重度…）
+  + **24 个字符 3-gram 哈希桶**（确定性 FNV-1a，含 URL/HTML 解码与归一化）——让模型从数据中**学习签名/
+  载荷文本**（如 `root:x:0:0`、`ORA-01756`、数据库报错），而非只靠硬编码正则。
+- **分类器**：MLP `41 → 20 → 1`（tanh 隐藏层 + sigmoid 输出），用**纯 Python 反向传播**训练与推理
+  （无 numpy/torch，零外部依赖）。权重：`models/vuln_model.json`。
+- **训练数据**：从**268 个模板技术各自的检测签名** + 代码模块精选原型自动生成正/误报样本。
+  重新训练：`python tools/train_model.py`。
+- **集成审核**：规则分 ⊕ ML `P(真阳性)`，再经**严格佐证门控**（缺少第二独立信号的边界项判为误报剔除；
+  Critical 始终保留待复核）。对全部 329 种技术的所有结果生效。
+- **反馈学习**：报告中的 👍/👎 → `models/feedback.jsonl` → 重训练时加权真实标签（越用越强）。
+  无模型时自动回退到规则模型。
+
 ## 许可证
 
 本项目基于 **MIT License** 发布。完整条款请参见 [LICENSE](LICENSE) 文件。

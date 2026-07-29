@@ -93,13 +93,8 @@ class SSRF(BaseModule):
                     evidence=f"{header}: {url} -> metadata signature matched",
                     remediation="Do not build server requests from client-supplied host/URL headers."))
                 return findings
-        findings.append(Finding(
-            module_id=self.id, title="SSRF in-band probes sent — no metadata reflected",
-            severity=Severity.INFO, url=ctx.target, confidence="Tentative",
-            description="In-band SSRF payloads (cloud metadata/internal) were injected but nothing was reflected. "
-                        "Blind SSRF may still exist — configure an OOB canary for callback confirmation.",
-            evidence="metadata endpoints probed on params + SSRF-prone headers",
-            remediation="Configure an OOB canary/poll URL to confirm blind SSRF."))
+        # Nothing reflected → no confirmable signal. Stay silent (avoid a false positive);
+        # blind SSRF needs an OOB canary, which the canary path handles when configured.
         return findings
 
     def run(self, ctx: ScanContext) -> list[Finding]:

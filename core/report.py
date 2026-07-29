@@ -187,7 +187,9 @@ def finding_to_report_md(target: str, finding: Finding, index: int | None = None
     L.append(f"| Affected Parameter | `{param}` |")
     L.append(f"| Authentication Required | No (unauthenticated) |")
     L.append(f"| User Interaction | {m['user_interaction']} |")
-    L.append(f"| Detection Confidence | {finding.confidence} |")
+    _cs = (finding.extra or {}).get("confidence_score")
+    L.append(f"| Detection Confidence | {finding.confidence}"
+             + (f" (verification score {_cs}/100)" if _cs is not None else "") + " |")
     L.append("")
 
     L.append("## Executive Summary")

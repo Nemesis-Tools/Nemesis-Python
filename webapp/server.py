@@ -210,6 +210,10 @@ def create_app() -> Flask:
             "max_depth": int(o.get("max_depth", 2)),
             "max_pages": int(o.get("max_pages", 15)),
             "guided": data.get("guided", False),
+            # Verification model (true-positive promotion + false-positive filtering).
+            "fp_filter": o.get("fp_filter", True),
+            "min_score": int(o.get("min_score", 38)),
+            "review_strict": o.get("review_strict", True),
         }
         # A scan needs its own browser; hand the live view over from any
         # interactive preview session.
@@ -307,6 +311,30 @@ def create_app() -> Flask:
             abort(404)
         return Response(report.findings_to_report_md(target, findings),
                         mimetype="text/markdown; charset=utf-8")
+
+    @app.route("/api/feedback", methods=["POST"])
+    def api_feedback():
+        """Record a TP/FP label for a finding → models/feedback.jsonl (retraining data)."""
+        data = request.get_json(force=True) or {}
+        idx, label = data.get("index"), data.get("label")
+        if label not in (0, 1):
+            return jsonify({"error": "label must be 0 (FP) or 1 (TP)"}), 400
+        with session.lock:
+            findings = list(session.findings)
+        if not isinstance(idx, int) or not (0 <= idx < len(findings)):
+            return jsonify({"error": "bad index"}), 400
+        try:
+            import json as _json
+            from core.ml_model import extract_features
+            feats = extract_features(findings[idx])
+            mdir = os.path.join(_ROOT, "models")
+            os.makedirs(mdir, exist_ok=True)
+            with open(os.path.join(mdir, "feedback.jsonl"), "a", encoding="utf-8") as fh:
+                fh.write(_json.dumps({"features": feats, "label": int(label),
+                                      "module": findings[idx].module_id}) + "\n")
+        except Exception as e:
+            return jsonify({"error": f"could not record: {e}"}), 500
+        return jsonify({"ok": True})
 
     return app
 
