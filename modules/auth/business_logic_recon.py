@@ -13,6 +13,7 @@ from modules.base import BaseModule, ScanContext, register
 from core.result import Finding, Severity
 from core.discovery import fetch_html, parse_forms
 from core.injection_points import discover_points
+from core.roe import AMOUNT_TAMPER_MIN_KRW
 
 PRICE_RE = re.compile(r"price|amount|amt|cost|total|fee|pay|payment|balance|credit|"
                       r"point|mileage|discount|coupon|promo|voucher|qty|quantity|count|num",
@@ -63,7 +64,9 @@ class BusinessLogicRecon(BaseModule):
                 title=f"{len(price_hits)} price/quantity parameter(s) — test for purchase-bypass",
                 severity=Severity.INFO, url=ctx.target, confidence="Tentative",
                 description=("Client-influenced price/quantity/discount parameters found. Manually test "
-                             "tampering (negative/zero values, changed totals, reused coupons)."),
+                             "tampering (negative/zero values, changed totals, reused coupons). "
+                             f"Per program policy, prove the flaw with the minimum amount "
+                             f"({AMOUNT_TAMPER_MIN_KRW} KRW) only — do not transact larger sums."),
                 evidence="\n".join(sorted(set(price_hits))[:40]),
                 remediation="Compute prices/entitlements server-side; never trust client-supplied amounts."))
         if priv_hits:

@@ -8,6 +8,11 @@ engagement, a bug-bounty program's defined scope, or your own lab). Unauthorized
 scanning may be illegal in your jurisdiction. The authors accept no liability for
 misuse.
 
+Testing must follow the **Rules of Engagement** in [POLICY.md](POLICY.md):
+prove a vulnerability is *possible*, then stop — e.g. SSRF is confirmed via a
+verification-domain callback only, and amount/price tampering is demonstrated
+with the minimum amount (100 KRW).
+
 ## Supported versions
 
 Security fixes target the `main` branch. There is no long-term-support branch;

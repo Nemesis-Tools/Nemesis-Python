@@ -1,9 +1,11 @@
 """SSRF detection via out-of-band interaction — CANARY DOMAIN ONLY.
 
 This module injects URLs that point exclusively at the user-configured
-verification/canary domain (a host you control). It NEVER targets internal
-ranges or third-party hosts. If no canary domain is configured, the module
-skips itself entirely.
+verification/canary domain (a host you control — e.g. the program's
+verification domain, see core.roe.SSRF_VERIFICATION_DOMAIN). It NEVER targets
+internal ranges or third-party hosts. If no canary domain is configured, the
+module skips itself entirely. Per program policy this proves *possibility only*
+(a confirmed callback); it never pivots to internal services or exfiltrates data.
 
 Detection:
   * If an OOB poll logger is configured, each token is checked and confirmed
