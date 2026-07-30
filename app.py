@@ -83,7 +83,8 @@ def _wait(url: str, timeout: float = 15.0) -> bool:
     end = time.time() + timeout
     while time.time() < end:
         try:
-            urllib.request.urlopen(url, timeout=1)
+            # Readiness poll of our own loopback server (fixed http://127.0.0.1 URL).
+            urllib.request.urlopen(url, timeout=1)  # nosec B310
             return True
         except Exception:
             time.sleep(0.2)
