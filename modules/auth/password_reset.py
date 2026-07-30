@@ -16,7 +16,7 @@ from urllib.parse import urljoin, urlparse, parse_qs
 
 from modules.base import BaseModule, ScanContext, register
 from core.result import Finding, Severity
-from core.discovery import fetch_html, parse_forms
+from core.discovery import parse_forms
 
 RESET_PATHS = ["/forgot", "/forgot-password", "/password/reset", "/reset-password",
                "/recover", "/account/recover", "/findpw", "/password/find", "/find/pw"]

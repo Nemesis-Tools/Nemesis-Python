@@ -12,6 +12,15 @@
   <b>로컬 ML/DL 검수 모델</b> + <b>멀티-LLM AI 분석</b>(Gemini·Groq·Cerebras·Mistral·OpenRouter·OpenAI) · <b>SAST 소스코드 분석</b>
 </p>
 
+<p align="center">
+  <a href="https://github.com/Nemesis-Tools/Nemesis-Python/actions/workflows/ci.yml"><img src="https://github.com/Nemesis-Tools/Nemesis-Python/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Nemesis-Tools/Nemesis-Python/actions/workflows/codeql.yml"><img src="https://github.com/Nemesis-Tools/Nemesis-Python/actions/workflows/codeql.yml/badge.svg" alt="CodeQL"></a>
+  <a href="https://github.com/Nemesis-Tools/Nemesis-Python/actions/workflows/security.yml"><img src="https://github.com/Nemesis-Tools/Nemesis-Python/actions/workflows/security.yml/badge.svg" alt="Security"></a>
+  <img src="https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue" alt="Python 3.11+">
+  <img src="https://img.shields.io/badge/code%20style-ruff-000000" alt="Ruff">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
+</p>
+
 ---
 
 ## 배경

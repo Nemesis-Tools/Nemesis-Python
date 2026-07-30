@@ -11,3 +11,12 @@ dist/
 !models/vuln_model.json
 models/feedback.jsonl
 .DS_Store
+
+# Test / lint / build caches and artifacts
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.egg-info/
+.mypy_cache/

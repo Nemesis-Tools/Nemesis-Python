@@ -8,11 +8,11 @@ Detects OAuth authorize flows and flags:
 from __future__ import annotations
 
 import re
-from urllib.parse import urlparse, parse_qs, urljoin
+from urllib.parse import urlparse, parse_qs
 
 from modules.base import BaseModule, ScanContext, register
 from core.result import Finding, Severity
-from core.http_utils import build_url_with_param, registrable
+from core.http_utils import build_url_with_param
 from core.discovery import fetch_html
 
 CANARY = "attacker.example.org"

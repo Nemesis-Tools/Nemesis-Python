@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import socket
 import ssl
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from urllib.parse import urlparse
 
 from modules.base import BaseModule, ScanContext, register
@@ -63,8 +63,8 @@ class TLSAnalysis(BaseModule):
                     cert = ss.getpeercert()
             not_after = cert.get("notAfter")
             if not_after:
-                exp = datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
-                days = (exp - datetime.now(timezone.utc)).days
+                exp = datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z").replace(tzinfo=UTC)
+                days = (exp - datetime.now(UTC)).days
                 if days < 0:
                     findings.append(Finding(module_id=self.id, title="Expired TLS certificate",
                         severity=Severity.HIGH, url=ctx.target, confidence="Firm",

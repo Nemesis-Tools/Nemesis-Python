@@ -11,12 +11,12 @@ beautifulsoup4>=4.12.0
 # Web UI (HTML front-end)
 flask>=3.0.0
 
-# Multi-LLM vulnerability-analysis agent (/test) — optional. Free-tier providers:
+# Multi-LLM vulnerability-analysis agent (/test) - optional. Free-tier providers:
 #   Gemini (google-genai) + OpenAI-compatible (Groq/Cerebras/Mistral/OpenRouter/OpenAI)
 google-genai>=1.0.0
 openai>=1.40.0
 
-# SAST source-code classifier (/sast, Track 2) — OPTIONAL, heavy.
+# SAST source-code classifier (/sast, Track 2) - OPTIONAL, heavy.
 # The heuristic CWE rule engine works with no extra deps. The CodeBERT /
 # GraphCodeBERT classifier (core/sast + tools/train_sast.py) needs:
 #   pip install torch transformers

@@ -1,0 +1,47 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "27 3 * * 1"  # weekly, Monday 03:27 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bandit:
+    name: Bandit (SAST)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install bandit
+        run: pip install "bandit[toml]"
+      - name: Full report (informational)
+        run: bandit -c pyproject.toml -r core modules tools webapp app.py main.py web.py || true
+      - name: Gate on medium+ severity / confidence
+        run: bandit -c pyproject.toml -r core modules tools webapp app.py main.py web.py --severity-level medium --confidence-level medium
+
+  pip-audit:
+    name: pip-audit (dependency CVEs)
+    runs-on: ubuntu-latest
+    # Informational: transitive advisories can appear at any time and should not
+    # block unrelated PRs. Findings are surfaced in the job log for triage.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install pip-audit
+        run: pip install pip-audit
+      - name: Audit runtime dependencies
+        run: pip-audit -r requirements.txt --desc

@@ -3,7 +3,7 @@ OWASP / CAPEC / attack-flow / root-cause samples — auto-derived from a Finding
 """
 from __future__ import annotations
 
-from core.result import Finding, Severity
+from core.result import Finding
 
 # kind -> (attack-flow ascii, (root-cause language, root-cause code))
 _KINDS = {

@@ -4,7 +4,6 @@ from __future__ import annotations
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from core.scanner import Scanner
-from core.result import Finding
 
 
 class ScanWorker(QThread):

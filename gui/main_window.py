@@ -1,7 +1,6 @@
 """Main PyQt5 window: scope gate, technique tree, live log, findings table, report export."""
 from __future__ import annotations
 
-import os
 
 from PyQt5.QtCore import Qt, QByteArray, QSize
 from PyQt5.QtGui import QColor, QFont, QIcon, QPixmap, QPainter
@@ -11,12 +10,12 @@ from PyQt5.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QCheckBox, QTreeWidget, QTreeWidgetItem,
     QPlainTextEdit, QTableWidget, QTableWidgetItem, QTabWidget, QProgressBar,
     QSpinBox, QDoubleSpinBox, QGroupBox, QMessageBox, QFileDialog, QSplitter,
-    QHeaderView, QAbstractItemView, QDialog, QTextEdit, QFrame,
+    QHeaderView, QAbstractItemView, QDialog, QTextEdit,
 )
 
 from modules.base import modules_by_category
 from modules import load_all
-from core.result import Finding, Severity
+from core.result import Finding
 from core import report
 from core.http_utils import parse_headers_block, parse_cookie_string
 from gui.worker import ScanWorker

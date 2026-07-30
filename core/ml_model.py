@@ -180,7 +180,7 @@ def load_model():
     for p in _model_paths():
         try:
             if os.path.exists(p):
-                with open(p, "r", encoding="utf-8") as fh:
+                with open(p, encoding="utf-8") as fh:
                     _CACHE["model"] = _MLP(json.load(fh))
                 break
         except Exception:

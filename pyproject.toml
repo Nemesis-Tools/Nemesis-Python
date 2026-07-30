@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nemesis"
+version = "0.1.0"
+description = "Nemesis — authorized web-application vulnerability scanner (bug-bounty toolkit)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+
+# ---------------------------------------------------------------------------
+# Ruff — linter. We enforce the rule groups that catch real bugs (pyflakes,
+# a subset of pycodestyle errors, bugbear, pyupgrade) and leave purely
+# stylistic rules (e.g. line-length E501) unenforced to avoid churn.
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = ["build", "dist", "__pycache__"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "B", "UP"]
+ignore = [
+    "E402",   # module-import-not-at-top — intentional lazy imports in entry points
+    "E701",   # multiple-statements-on-one-line (colon) — used deliberately
+    "E702",   # multiple-statements-on-one-line (semicolon) — used deliberately
+    "B008",   # function call in default argument — acceptable here
+    "B905",   # zip() without strict= — kept for 3.9 compatibility of snippets
+    "UP035",  # deprecated typing imports — some kept for clarity
+    "UP031",  # printf-style formatting — used intentionally in attack-payload builders
+    "UP042",  # str+Enum — Severity uses (str, Enum) deliberately for JSON serialization
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tools/*" = ["B"]
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+addopts = "-ra -q"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+# ---------------------------------------------------------------------------
+# Coverage
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+branch = true
+source = ["core", "modules"]
+omit = ["*/__pycache__/*", "tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+
+# ---------------------------------------------------------------------------
+# Bandit — static security analysis of our own source.
+# The skips below are findings inherent to a vulnerability scanner's job and
+# are reviewed & intentional, not defects:
+#   B501  requests(verify=False) — we must probe hosts with broken/expired TLS
+#   B108  "/tmp/" is a URL path inside a directory wordlist, not a temp file
+#   B615  HuggingFace from_pretrained loads a local, bundled model directory
+# ---------------------------------------------------------------------------
+[tool.bandit]
+exclude_dirs = ["tests", "build", "dist", ".venv", "venv", "__pycache__"]
+skips = ["B501", "B108", "B615"]

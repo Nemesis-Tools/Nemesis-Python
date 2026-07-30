@@ -114,7 +114,6 @@ class SSRF(BaseModule):
             if ctx.should_stop():
                 break
             token = oob.new_token("p")
-            hit = False
             for payload in self._payloads(oob, token):
                 if ctx.should_stop():
                     break

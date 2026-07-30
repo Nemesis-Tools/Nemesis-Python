@@ -185,7 +185,7 @@ def finding_to_report_md(target: str, finding: Finding, index: int | None = None
     L.append(f"| CAPEC | {m['capec']} |")
     L.append(f"| Affected Endpoint | `{p.scheme}://{p.netloc}{p.path or '/'}` |")
     L.append(f"| Affected Parameter | `{param}` |")
-    L.append(f"| Authentication Required | No (unauthenticated) |")
+    L.append("| Authentication Required | No (unauthenticated) |")
     L.append(f"| User Interaction | {m['user_interaction']} |")
     _cs = (finding.extra or {}).get("confidence_score")
     L.append(f"| Detection Confidence | {finding.confidence}"
@@ -224,7 +224,7 @@ def finding_to_report_md(target: str, finding: Finding, index: int | None = None
     L.append(f"- **Method:** {method}")
     L.append(f"- **Parameter:** `{param}`")
     L.append(f"- **Host:** {p.netloc}")
-    L.append(f"- **Authentication:** Not required")
+    L.append("- **Authentication:** Not required")
     L.append("")
 
     L.append("## Proof of Concept")
@@ -331,7 +331,7 @@ def finding_to_report_md(target: str, finding: Finding, index: int | None = None
 
     L.append("## Evidence")
     L.append("")
-    L.append(f"- **Request:** see HTTP Request section")
+    L.append("- **Request:** see HTTP Request section")
     L.append(f"- **Response indicator:** `{(finding.evidence or '')[:160]}`")
     L.append(f"- **Detection module:** `{finding.module_id}`")
     L.append("")

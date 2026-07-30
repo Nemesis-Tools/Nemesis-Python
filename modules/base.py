@@ -6,7 +6,7 @@ Adding a new technique = create a subclass of BaseModule decorated with
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Type
+from typing import Callable
 
 import requests
 
@@ -18,7 +18,7 @@ from core.rate_limiter import RateLimiter
 class ScanContext:
     """Everything a module needs to do its work."""
     target: str                       # normalized base URL under test
-    browser: "object"                 # BrowserManager (avoid import cycle)
+    browser: object                 # BrowserManager (avoid import cycle)
     http: requests.Session
     rate_limiter: RateLimiter
     log: Callable[[str], None]
@@ -56,10 +56,10 @@ class BaseModule:
 # ----------------------------------------------------------------------------
 # Registry
 # ----------------------------------------------------------------------------
-_REGISTRY: dict[str, Type[BaseModule]] = {}
+_REGISTRY: dict[str, type[BaseModule]] = {}
 
 
-def register(cls: Type[BaseModule]) -> Type[BaseModule]:
+def register(cls: type[BaseModule]) -> type[BaseModule]:
     if not getattr(cls, "id", None) or cls.id == "base":
         raise ValueError(f"Module {cls.__name__} must define a unique `id`")
     if cls.id in _REGISTRY:
@@ -68,12 +68,12 @@ def register(cls: Type[BaseModule]) -> Type[BaseModule]:
     return cls
 
 
-def all_modules() -> list[Type[BaseModule]]:
+def all_modules() -> list[type[BaseModule]]:
     return list(_REGISTRY.values())
 
 
-def modules_by_category() -> dict[str, list[Type[BaseModule]]]:
-    out: dict[str, list[Type[BaseModule]]] = {}
+def modules_by_category() -> dict[str, list[type[BaseModule]]]:
+    out: dict[str, list[type[BaseModule]]] = {}
     for cls in _REGISTRY.values():
         out.setdefault(cls.category, []).append(cls)
     for v in out.values():
@@ -81,5 +81,5 @@ def modules_by_category() -> dict[str, list[Type[BaseModule]]]:
     return out
 
 
-def get_module(module_id: str) -> Type[BaseModule] | None:
+def get_module(module_id: str) -> type[BaseModule] | None:
     return _REGISTRY.get(module_id)

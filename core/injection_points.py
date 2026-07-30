@@ -8,7 +8,7 @@ modules share one page load.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from urllib.parse import urlparse, urlunparse, parse_qsl
+from urllib.parse import urlparse, urlunparse
 
 from core.http_utils import parse_query_params
 from core.discovery import parse_forms

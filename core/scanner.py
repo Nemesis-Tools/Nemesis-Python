@@ -29,7 +29,7 @@ from core.browser import BrowserManager
 from core.rate_limiter import RateLimiter
 from core.http_utils import make_session
 from core.oob import OOBClient
-from core.result import Finding, Severity
+from core.result import Finding
 from core.crawler import extract_links, normalize, registrable
 from core import chain
 from core import verifier
@@ -656,7 +656,7 @@ class Scanner:
             # ---- Phase 3: chaining (escalate + correlate) ----
             if not self._stop.is_set() and self.findings:
                 ctx.target = self.target
-                self._log(f"\n########## CHAIN ENGINE ##########")
+                self._log("\n########## CHAIN ENGINE ##########")
                 chained = chain.run_chains(ctx, self.findings, self.on_finding)
                 self.findings.extend(chained)
                 self._log(f"    -> {len(chained)} chained finding(s)")

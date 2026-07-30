@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import uuid
-from urllib.parse import urlparse
 
 from modules.base import BaseModule, ScanContext, register
 from core.result import Finding, Severity

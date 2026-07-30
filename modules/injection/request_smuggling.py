@@ -41,7 +41,7 @@ def _send_raw(host: str, port: int, use_tls: bool, verify: bool, payload: bytes)
             data = sock.recv(64)
             if not data:
                 return time.monotonic() - start
-        except socket.timeout:
+        except TimeoutError:
             return TIMEOUT
         return time.monotonic() - start
     except Exception:

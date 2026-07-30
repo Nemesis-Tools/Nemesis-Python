@@ -50,7 +50,7 @@ def scan_path(path: str, max_files: int = 400, log=None) -> dict:
         try:
             if os.path.getsize(fpath) > _MAX_BYTES:
                 continue
-            with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
+            with open(fpath, encoding="utf-8", errors="replace") as fh:
                 code = fh.read()
         except Exception:
             continue

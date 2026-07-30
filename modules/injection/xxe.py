@@ -89,8 +89,8 @@ class XXE(BaseModule):
         oob = ctx.oob
         if oob is not None and oob.enabled and not ctx.should_stop():
             token = oob.new_token("xxe")
-            for ctype, r in self._post_xml(ctx, _oob_payload(oob.payload_url(token))):
-                pass
+            for _ctype, _resp in self._post_xml(ctx, _oob_payload(oob.payload_url(token))):
+                pass  # fire-and-forget: OOB callback is checked below
             if oob.poll_url and oob.check(token):
                 findings.append(Finding(
                     module_id=self.id, title="Blind XXE confirmed via OOB callback",

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import re
-from urllib.parse import urljoin
 
 from modules.base import BaseModule, ScanContext, register
 from core.result import Finding, Severity

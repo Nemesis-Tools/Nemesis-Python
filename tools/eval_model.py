@@ -63,7 +63,6 @@ def main():
     if model is None:
         print("[!] models/vuln_model.json 없음 — 먼저 python tools/train_model.py 실행")
         return
-    stored = getattr(model, "features", None)
     print(f"[*] model loaded (features={len(model.features)})")
 
     # Stored provenance metrics (from the last training run).

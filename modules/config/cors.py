@@ -1,7 +1,6 @@
 """CORS misconfiguration checks."""
 from __future__ import annotations
 
-from urllib.parse import urlparse
 
 from modules.base import BaseModule, ScanContext, register
 from core.result import Finding, Severity
@@ -71,7 +70,7 @@ class CORSCheck(BaseModule):
                 url=target,
                 confidence="Firm",
                 description="ACAO '*' combined with Allow-Credentials true is an insecure configuration.",
-                evidence=f"ACAO: *\nACAC: true",
+                evidence="ACAO: *\nACAC: true",
                 remediation="Do not combine wildcard origins with credentialed requests.",
             ))
 

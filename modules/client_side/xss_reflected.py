@@ -6,7 +6,6 @@ Selenium. No alert()/prompt() spam, no data exfiltration — just a boolean.
 """
 from __future__ import annotations
 
-from urllib.parse import urlparse
 
 from modules.base import BaseModule, ScanContext, register
 from core.result import Finding, Severity

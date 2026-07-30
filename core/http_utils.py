@@ -6,7 +6,7 @@ are made available to modules via ScanContext.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from urllib.parse import urlparse, urlencode, parse_qsl, urlunparse
 
 import requests
